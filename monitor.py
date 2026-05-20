@@ -192,10 +192,54 @@ def get_post_list(page, cafe_id, num_id):
     # 새 네이버 카페 URL 구조 (숫자 ID 사용)
     url = f"https://cafe.naver.com/f-e/cafes/{num_id}/menus/0?viewType=L&page=1"
     page.goto(url, wait_until="networkidle")
-    page.wait_for_timeout(4000)
+    page.wait_for_timeout(6000)   # React 렌더링 대기
 
     frame = page
     log(f"접속 frame: {frame.url[:80]}")
+
+    # 모든 가능한 셀렉터 시도
+    rows = []
+    selectors = [
+        "tr.article",
+        "[data-article-id]",
+        ".article-board-list tr",
+        ".board-list li",
+        "li.board-list-item",
+        ".article_wrap",
+        "ul.article-board > li",
+        ".cafe-list-item",
+        ".ArticleList tr",
+        ".article-list-item",
+        "table.article-board tbody tr",
+        ".board_list tr",
+        ".list_wrap li",
+        "div.article-item",
+        ".inner_list",
+        ".item-article",
+        "article",
+    ]
+    for sel in selectors:
+        found = frame.query_selector_all(sel)
+        if found:
+            rows = found
+            log(f"셀렉터 [{sel}] 매칭: {len(rows)}개")
+            break
+
+    if not rows:
+        log("셀렉터 전체 실패 - HTML 구조 확인 필요")
+        # 페이지 내 전체 텍스트에서 게시글 링크 직접 탐색
+        all_links = frame.query_selector_all("a[href*='/articles/']")
+        log(f"articles 링크 {len(all_links)}개 발견")
+        if all_links:
+            rows = all_links
+
+    if not rows:
+        try:
+            with open(f"debug_{cafe_id}.html", "w", encoding="utf-8") as f:
+                f.write(frame.content())
+            log(f"디버그 HTML 저장: debug_{cafe_id}.html")
+        except Exception as e:
+            log(f"디버그 HTML 저장 실패: {e}")
 
     cutoff = datetime.now(KST) - timedelta(hours=TIME_WINDOW)
     posts  = []
@@ -212,14 +256,12 @@ def get_post_list(page, cafe_id, num_id):
     if not rows:
         rows = frame.query_selector_all(".article_wrap")
     if not rows:
-        # 새 FE 구조 대응
         rows = frame.query_selector_all("ul.article-board > li")
     if not rows:
         rows = frame.query_selector_all(".cafe-list-item")
 
     log(f"게시글 행 {len(rows)}개 감지")
 
-    # 디버깅: 0건이면 HTML 저장
     if not rows:
         try:
             with open(f"debug_{cafe_id}.html", "w", encoding="utf-8") as f:
@@ -230,18 +272,38 @@ def get_post_list(page, cafe_id, num_id):
 
     for row in rows[:100]:
         try:
-            title_el = (row.query_selector("a.article") or
-                        row.query_selector("td.td_article a"))
-            date_el  = (row.query_selector("td.td_date") or
-                        row.query_selector(".date"))
+            # 새 구조 대응: articles 링크에서 직접 파싱
+            if row.tag_name == "a":
+                title_el = row
+                date_el  = None
+            else:
+                title_el = (row.query_selector("a.article") or
+                            row.query_selector("td.td_article a") or
+                            row.query_selector("a[href*='/articles/']") or
+                            row.query_selector("a[href*='articleid=']"))
+                date_el  = (row.query_selector("td.td_date") or
+                            row.query_selector(".date") or
+                            row.query_selector(".article-date") or
+                            row.query_selector("time"))
             if not title_el:
                 continue
 
-            title     = title_el.inner_text().strip()
-            href      = title_el.get_attribute("href") or ""
-            post_id   = (href.split("articleid=")[-1].split("&")[0]
-                         if "articleid=" in href
-                         else href.split("/")[-1].split("?")[0])
+            title = title_el.inner_text().strip()
+            if not title:
+                continue
+
+            href    = title_el.get_attribute("href") or ""
+            # 새 URL: /f-e/cafes/28497937/articles/1441600
+            if "/articles/" in href:
+                post_id = href.split("/articles/")[-1].split("?")[0]
+            elif "articleid=" in href:
+                post_id = href.split("articleid=")[-1].split("&")[0]
+            else:
+                post_id = href.rstrip("/").split("/")[-1].split("?")[0]
+
+            if not post_id or not post_id.isdigit():
+                continue
+
             date_str  = date_el.inner_text().strip() if date_el else ""
             post_time = parse_date(date_str)
 
@@ -251,7 +313,7 @@ def get_post_list(page, cafe_id, num_id):
             posts.append({
                 "post_id":   post_id,
                 "title":     title,
-                "url":       f"https://cafe.naver.com/{cafe_id}/{post_id}",
+                "url":       f"https://cafe.naver.com/f-e/cafes/{num_id}/articles/{post_id}",
                 "post_time": post_time,
             })
         except Exception as e:
