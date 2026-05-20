@@ -41,7 +41,7 @@ CAFES = [
 ]
 
 KEYWORDS    = ["한국투자증권", "한투", "뱅키스", "BanKIS"]
-TIME_WINDOW = 24   # 탐지 범위 (시간)
+TIME_WINDOW = 48   # 탐지 범위 (시간)
 
 # ─────────────────────────────────────────
 # 부정 강도 판단 기준 (score 0~10)
@@ -242,11 +242,11 @@ def search_keyword(page, cafe_id, num_id, keyword):
 
             date_str  = date_el.inner_text().strip() if date_el else ""
 
-            # 날짜 없으면 스킵 (cutoff 오판 방지)
+            # 날짜 없으면 오늘로 처리 (검색결과는 최신글 위주라 통과시킴)
             if not date_str:
-                continue
-
-            post_time = parse_date(date_str)
+                post_time = datetime.now(KST)
+            else:
+                post_time = parse_date(date_str)
 
             # 24시간 초과 게시글은 중단 (검색결과는 최신순)
             if post_time < cutoff:
