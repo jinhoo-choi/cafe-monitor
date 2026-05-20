@@ -523,6 +523,34 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count):
           탐지 키워드 : 한국투자증권, 한투, 뱅키스<br>
           담당자 : 최진후 차장<br>
           <span style="color:#ccc;">Powered by Claude AI · 자동 수집 및 감성 분석</span>
+          <br><br>
+          <table cellpadding="0" cellspacing="0" border="0" style="margin:8px auto 0;border-collapse:collapse;">
+            <tr>
+              <td style="font-size:9px;color:#999;padding:0 0 4px 0;text-align:left;letter-spacing:0.5px;">
+                ■ 부정 강도 기준 (Claude AI 채점)
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+                  <tr>
+                    <td style="background:#4caf50;width:40px;height:8px;font-size:0;">&nbsp;</td>
+                    <td style="background:#8bc34a;width:40px;height:8px;font-size:0;">&nbsp;</td>
+                    <td style="background:#ffc107;width:40px;height:8px;font-size:0;">&nbsp;</td>
+                    <td style="background:#ff9800;width:40px;height:8px;font-size:0;">&nbsp;</td>
+                    <td style="background:#f44336;width:40px;height:8px;font-size:0;">&nbsp;</td>
+                  </tr>
+                  <tr>
+                    <td style="font-size:8px;color:#aaa;text-align:center;padding-top:3px;">0~1<br>무관</td>
+                    <td style="font-size:8px;color:#aaa;text-align:center;padding-top:3px;">2~3<br>경미</td>
+                    <td style="font-size:8px;color:#aaa;text-align:center;padding-top:3px;">4~5<br>불만</td>
+                    <td style="font-size:8px;color:#aaa;text-align:center;padding-top:3px;">6~7<br>비판</td>
+                    <td style="font-size:8px;color:#aaa;text-align:center;padding-top:3px;">8~10<br>긴급</td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
         </td>
       </tr>
     </table>
@@ -611,14 +639,13 @@ def main():
                     mark_seen(post["post_id"])
                     log(f"AI 결과 - 부정:{result['is_negative']} | 강도:{result['score']}/10")
 
-                    # score >= SCORE_THRESHOLD 인 경우만 알림 대상
-                    if result["is_negative"] and result["score"] >= SCORE_THRESHOLD:
-                        post["cafe_name"]  = cafe_name
-                        post["matched_kw"] = html.escape(matched)
-                        post["score"]      = result["score"]
-                        post["summary"]    = html.escape(result["summary"])
-                        post["title"]      = html.escape(post["title"])
-                        all_alerts.append(post)
+                    # 키워드 탐지된 모든 게시글 알림 발송
+                    post["cafe_name"]  = cafe_name
+                    post["matched_kw"] = html.escape(matched)
+                    post["score"]      = result["score"]
+                    post["summary"]    = html.escape(result["summary"])
+                    post["title"]      = html.escape(post["title"])
+                    all_alerts.append(post)
 
             browser.close()
 
