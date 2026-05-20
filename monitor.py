@@ -38,7 +38,7 @@ COOKIE_FILE = "naver_cookies.json"
 CAFES = [
     {"id": "likeusstock", "num_id": "28497937", "name": "미국주식이 미래다"},
     {"id": "vilab",       "num_id": "11525920", "name": "가치투자연구소"},
-    {"id": "yamizal",     "num_id": "30676048", "name": "미주미(야미잘)"},
+    {"id": "yamizal",     "num_id": "30676048", "name": "미국 주식에 미치다"},
 ]
 
 KEYWORDS    = ["한국투자증권", "한투", "뱅키스", "BanKIS"]
@@ -467,7 +467,7 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count):
     now_str  = datetime.now(KST).strftime("%Y.%m.%d %H:%M")
 
     now_kst  = datetime.now(KST)
-    subject  = f"(eBiz본부) 부정여론 탐지봇_{now_kst.strftime('%m')}월{now_kst.strftime('%d')}일 {now_kst.strftime('%H')}시 기준 {total}건"
+    subject  = f"(eBiz본부) 커뮤니티 부정여론 탐지봇 {now_kst.strftime('%m')}월 {now_kst.strftime('%d')}일 {now_kst.strftime('%H')}시 기준"
     banner_badge = f"AI 부정여론 탐지 · {total}건"
     banner_title = f"네이버 카페 부정 언급 {total}건 탐지"
 
