@@ -12,7 +12,6 @@ import html
 import smtplib
 import traceback
 import re
-import sqlite3
 import time
 import urllib.parse
 import requests
@@ -43,7 +42,7 @@ CAFES = [
 ]
 
 KEYWORDS    = ["한국투자증권", "한투", "뱅키스", "BanKIS"]
-DB_FILE      = "seen_posts.db"
+DB_FILE      = "seen_posts.json"
 TIME_WINDOW = 6    # 탐지 범위 (시간)
 
 # ─────────────────────────────────────────
@@ -144,28 +143,28 @@ def send_status_email(status, detail=""):
 # ─────────────────────────────────────────
 
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS seen_posts (
-            post_id TEXT PRIMARY KEY,
-            seen_at TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+    if not os.path.exists(DB_FILE):
+        with open(DB_FILE, "w", encoding="utf-8") as f:
+            json.dump({}, f)
+
+def _load_db():
+    try:
+        with open(DB_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _save_db(data):
+    with open(DB_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 def is_new(unique_id):
-    conn = sqlite3.connect(DB_FILE)
-    row = conn.execute("SELECT 1 FROM seen_posts WHERE post_id=?", (unique_id,)).fetchone()
-    conn.close()
-    return row is None
+    return unique_id not in _load_db()
 
 def mark_seen(unique_id):
-    conn = sqlite3.connect(DB_FILE)
-    conn.execute("INSERT OR IGNORE INTO seen_posts VALUES (?,?)",
-                 (unique_id, datetime.now().isoformat()))
-    conn.commit()
-    conn.close()
+    data = _load_db()
+    data[unique_id] = datetime.now().isoformat()
+    _save_db(data)
 
 def parse_date(date_str):
     now = datetime.now(KST)
@@ -371,6 +370,7 @@ score는 부정 강도 (0=전혀 부정 아님, 10=매우 부정적)"""
             },
             timeout=30,
         )
+        response.raise_for_status()
         resp = response.json()
         if "error" in resp:
             err_type = resp["error"].get("type", "")
@@ -383,6 +383,7 @@ score는 부정 강도 (0=전혀 부정 아님, 10=매우 부정적)"""
                     json={"model": CLAUDE_MODEL, "max_tokens": 300, "messages": [{"role": "user", "content": prompt}]},
                     timeout=30,
                 )
+                response.raise_for_status()
                 resp = response.json()
                 if "error" in resp:
                     log(f"AI 재시도 실패: {resp['error'].get('message','')}")
