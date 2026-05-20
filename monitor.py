@@ -175,10 +175,15 @@ def parse_date(date_str):
             return now - timedelta(hours=int(date_str.replace("시간 전", "").strip()))
         if ":" in date_str:
             t = datetime.strptime(date_str, "%H:%M")
-            return now.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
+            parsed = now.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
+            # 미래 시각이면 전날로 처리
+            if parsed > now:
+                parsed -= timedelta(days=1)
+            return parsed
         if "." in date_str:
             d = datetime.strptime(date_str.strip(), "%Y.%m.%d")
-            return d.replace(tzinfo=KST)
+            # 날짜만 있는 경우 당일 현재 시각으로 처리 (cutoff 오판 방지)
+            return d.replace(hour=now.hour, minute=now.minute, tzinfo=KST)
     except Exception:
         pass
     return now
