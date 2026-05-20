@@ -191,10 +191,10 @@ def parse_date(date_str):
 
 def search_keyword(page, cafe_id, num_id, keyword):
     """카페 인카페 검색으로 키워드 포함 게시글 수집 (24시간 이내)"""
-    # 인카페 검색 URL (제목+본문 대상)
+    # 인카페 검색 URL (실제 확인된 구조)
     import urllib.parse
     encoded = urllib.parse.quote(keyword)
-    url = f"https://cafe.naver.com/f-e/cafes/{num_id}/articles?query={encoded}&searchBy=0&boardType=L&page=1"
+    url = f"https://cafe.naver.com/f-e/cafes/{num_id}/menus/0?viewType=L&ta=ARTICLE_COMMENT&page=1&q={encoded}"
     page.goto(url, wait_until="networkidle")
     page.wait_for_timeout(4000)
 
