@@ -52,7 +52,7 @@ TIME_WINDOW = 6    # 탐지 범위 (시간)
 # 4~6 : 명확한 불만·비판·피해 호소
 # 7~10: 강한 비판·확산 가능성 높음
 # ※ 현재는 키워드 탐지 게시글 전체 발송 (score는 이메일 카드에 참고 표시)
-SCORE_THRESHOLD = 4   # 향후 필터 재활성화 시 사용
+SCORE_THRESHOLD = 1   # 부정 강도 이 값 이상인 경우만 알림 발송
 MAX_ALERTS     = 30   # 이메일 발송 최대 건수 제한
 
 KST = timezone(timedelta(hours=9))
@@ -130,13 +130,13 @@ def send_status_email(status, detail=""):
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"]    = GMAIL_USER
-    msg["To"]      = GMAIL_USER   # 발신자에게만
+    msg["To"]      = NOTIFY_EMAIL
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(GMAIL_USER, GMAIL_APP_PW)
-        s.sendmail(GMAIL_USER, GMAIL_USER, msg.as_string())
-    log(f"상태 이메일 발송 ({status}) → {GMAIL_USER}")
+        s.sendmail(GMAIL_USER, NOTIFY_EMAIL, msg.as_string())
+    log(f"상태 이메일 발송 ({status}) → {NOTIFY_EMAIL}")
 
 # ─────────────────────────────────────────
 # DB (중복 방지)
@@ -656,12 +656,13 @@ def main():
                         mark_seen(f"{cafe_id}:{post['post_id']}")
                     log(f"AI 결과 - 부정:{result['is_negative']} | 강도:{result['score']}/10")
 
-                    # 키워드 탐지된 모든 게시글 알림 발송
+                    # 부정 강도 SCORE_THRESHOLD 이상인 경우만 알림 발송
                     post["cafe_name"]  = cafe_name
                     post["matched_kw"] = matched
                     post["score"]      = result["score"]
                     post["summary"]    = result["summary"]
-                    all_alerts.append(post)
+                    if result["score"] >= SCORE_THRESHOLD:
+                        all_alerts.append(post)
 
             browser.close()
 
