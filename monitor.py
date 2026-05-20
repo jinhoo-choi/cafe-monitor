@@ -189,41 +189,18 @@ def parse_date(date_str):
     return now
 
 def get_post_list(page, cafe_id):
-    url = f"https://cafe.naver.com/{cafe_id}"
+    # 전체글보기 직접 접근 (iframe 우회)
+    url = f"https://cafe.naver.com/ArticleList.nhn?search.clubid={cafe_id}&search.boardtype=L&search.page=1"
     page.goto(url, wait_until="domcontentloaded")
-    page.wait_for_timeout(5000)   # 5초로 증가
+    page.wait_for_timeout(3000)
 
-    # iframe 접근
-    frame = None
+    frame = page
     for f in page.frames:
-        if cafe_id in f.url and f.url != url and "about:blank" not in f.url:
+        if "ArticleList" in f.url and "about:blank" not in f.url:
             frame = f
             break
-    if not frame:
-        for f in page.frames:
-            if "ArticleList" in f.url or "articles" in f.url:
-                frame = f
-                break
-    # iframe 못 찾으면 추가 대기 후 재시도
-    if not frame or "about:blank" in frame.url:
-        log("iframe 미감지 - 추가 대기 후 재시도")
-        page.wait_for_timeout(5000)
-        for f in page.frames:
-            if cafe_id in f.url and "about:blank" not in f.url:
-                frame = f
-                break
-    if not frame or "about:blank" in frame.url:
-        frame = page
 
     log(f"접속 frame: {frame.url[:80]}")
-
-    # 디버깅: 전체 HTML 저장
-    try:
-        with open(f"debug_{cafe_id}.html", "w", encoding="utf-8") as f:
-            f.write(frame.content())
-        log(f"디버그 HTML 저장 완료: debug_{cafe_id}.html")
-    except Exception as e:
-        log(f"디버그 HTML 저장 실패: {e}")
 
     cutoff = datetime.now(KST) - timedelta(hours=TIME_WINDOW)
     posts  = []
