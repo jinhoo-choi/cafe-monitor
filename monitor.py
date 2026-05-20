@@ -295,8 +295,12 @@ def get_post_detail(page, post_url, cafe_id):
     # post_url: https://cafe.naver.com/f-e/cafes/{num_id}/articles/{articleId}
     # → iframe src: https://cafe.naver.com/ca-fe/cafes/{num_id}/articles/{articleId}?fromNext=true
     inner_url = post_url.replace("/f-e/cafes/", "/ca-fe/cafes/") + "?fromNext=true"
-    page.goto(inner_url, wait_until="networkidle")
-    page.wait_for_timeout(3000)
+    try:
+        page.goto(inner_url, wait_until="domcontentloaded", timeout=15000)
+        page.wait_for_timeout(2000)
+    except Exception:
+        # 타임아웃 시 현재 상태로 진행
+        page.wait_for_timeout(1000)
 
     frame = page
 
@@ -357,7 +361,11 @@ score는 부정 강도 (0=전혀 부정 아님, 10=매우 부정적)"""
             },
             timeout=30,
         )
-        text = response.json()["content"][0]["text"].strip()
+        resp = response.json()
+        if "error" in resp:
+            log(f"AI API 오류: {resp['error'].get('message','')}")
+            return {"is_negative": False, "summary": "분석 실패", "score": 0}
+        text = resp["content"][0]["text"].strip()
         if "```" in text:
             text = text.split("```")[1].replace("json", "").strip()
         return json.loads(text)
