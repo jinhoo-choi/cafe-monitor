@@ -155,8 +155,8 @@ def parse_date(date_str):
         if "." in date_str:
             clean = date_str.strip().rstrip(".")
             d = datetime.strptime(clean, "%Y.%m.%d")
-            # 날짜만 있는 경우 23:59로 처리 (해당 날 가장 늦은 시각 → cutoff 판정 보수적)
-            return d.replace(hour=23, minute=59, second=59, tzinfo=KST)
+            # 날짜만 있는 경우 00:00으로 처리 (당일 자정 기준 → 3시간 이내 엄격 필터)
+            return d.replace(hour=0, minute=0, second=0, tzinfo=KST)
     except Exception:
         pass
     return now
