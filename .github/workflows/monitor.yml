@@ -10,7 +10,7 @@ permissions:
 
 concurrency:
   group: naver-cafe-monitor
-  cancel-in-progress: false   # 실행 중 작업은 취소하지 않음
+  cancel-in-progress: true    # 동시 실행 시 이전 작업 취소 (DB 충돌 방지)
 
 jobs:
   monitor:
