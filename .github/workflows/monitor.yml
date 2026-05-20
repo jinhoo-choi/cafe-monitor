@@ -1,0 +1,58 @@
+name: 미국주식이 미래다 부정여론 모니터링
+
+on:
+  schedule:
+    - cron: '0 */3 * * *'   # 3시간마다 실행 (UTC 0, 3, 6, 9, 12, 15, 18, 21시)
+  workflow_dispatch:          # 수동 실행 가능
+
+permissions:
+  contents: write             # seen_posts.db 커밋을 위해 필요
+
+concurrency:
+  group: naver-cafe-monitor
+  cancel-in-progress: false   # 실행 중 작업은 취소하지 않음
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15       # 무한 루프 / 블로킹 방지
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 패키지 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests playwright
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: 네이버 쿠키 복원
+        run: |
+          cat > naver_cookies.json <<'EOF'
+          ${{ secrets.NAVER_COOKIES_JSON }}
+          EOF
+
+      - name: 모니터링 실행
+        env:
+          GMAIL_USER:     ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PW:   ${{ secrets.GMAIL_APP_PW }}
+          NOTIFY_EMAIL:   ${{ secrets.NOTIFY_EMAIL }}
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+        run: python monitor.py
+
+      - name: DB 변경사항 커밋
+        if: always()
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add seen_posts.db || true
+          git diff --cached --quiet || git commit -m "update seen posts db"
+          git pull --rebase || true
+          git push || true
