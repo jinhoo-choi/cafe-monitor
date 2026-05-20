@@ -181,75 +181,33 @@ def parse_date(date_str):
                 parsed -= timedelta(days=1)
             return parsed
         if "." in date_str:
-            d = datetime.strptime(date_str.strip(), "%Y.%m.%d")
-            # 날짜만 있는 경우 당일 현재 시각으로 처리 (cutoff 오판 방지)
-            return d.replace(hour=now.hour, minute=now.minute, tzinfo=KST)
+            clean = date_str.strip().rstrip(".")
+            d = datetime.strptime(clean, "%Y.%m.%d")
+            # 날짜만 있는 경우 23:59로 처리 (해당 날 가장 늦은 시각 → cutoff 판정 보수적)
+            return d.replace(hour=23, minute=59, second=59, tzinfo=KST)
     except Exception:
         pass
     return now
 
-def get_post_list(page, cafe_id, num_id):
-    # 새 네이버 카페 URL 구조 (숫자 ID 사용)
-    url = f"https://cafe.naver.com/f-e/cafes/{num_id}/menus/0?viewType=L&page=1"
+def search_keyword(page, cafe_id, num_id, keyword):
+    """카페 인카페 검색으로 키워드 포함 게시글 수집 (24시간 이내)"""
+    # 인카페 검색 URL (제목+본문 대상)
+    import urllib.parse
+    encoded = urllib.parse.quote(keyword)
+    url = f"https://cafe.naver.com/f-e/cafes/{num_id}/articles?query={encoded}&searchBy=0&boardType=L&page=1"
     page.goto(url, wait_until="networkidle")
-    page.wait_for_timeout(6000)   # React 렌더링 대기
+    page.wait_for_timeout(4000)
 
-    frame = page
-    log(f"접속 frame: {frame.url[:80]}")
-
-    # 모든 가능한 셀렉터 시도
-    rows = []
-    selectors = [
-        "tr.article",
-        "[data-article-id]",
-        ".article-board-list tr",
-        ".board-list li",
-        "li.board-list-item",
-        ".article_wrap",
-        "ul.article-board > li",
-        ".cafe-list-item",
-        ".ArticleList tr",
-        ".article-list-item",
-        "table.article-board tbody tr",
-        ".board_list tr",
-        ".list_wrap li",
-        "div.article-item",
-        ".inner_list",
-        ".item-article",
-        "article",
-    ]
-    for sel in selectors:
-        found = frame.query_selector_all(sel)
-        if found:
-            rows = found
-            log(f"셀렉터 [{sel}] 매칭: {len(rows)}개")
-            break
-
-    if not rows:
-        log("셀렉터 전체 실패 - HTML 구조 확인 필요")
-        # 페이지 내 전체 텍스트에서 게시글 링크 직접 탐색
-        all_links = frame.query_selector_all("a[href*='/articles/']")
-        log(f"articles 링크 {len(all_links)}개 발견")
-        if all_links:
-            rows = all_links
-
-    if not rows:
-        try:
-            with open(f"debug_{cafe_id}.html", "w", encoding="utf-8") as f:
-                f.write(frame.content())
-            log(f"디버그 HTML 저장: debug_{cafe_id}.html")
-        except Exception as e:
-            log(f"디버그 HTML 저장 실패: {e}")
+    log(f"  검색: [{keyword}] → {url[:80]}")
 
     cutoff = datetime.now(KST) - timedelta(hours=TIME_WINDOW)
     posts  = []
 
-    # 확인된 실제 구조: table.article-table tbody tr (board-notice 제외)
-    all_rows = frame.query_selector_all("table.article-table tbody tr")
+    all_rows = page.query_selector_all("table.article-table tbody tr")
     rows = [r for r in all_rows if "board-notice" not in (r.get_attribute("class") or "")]
-    log(f"게시글 행 {len(rows)}개 감지 (전체 {len(all_rows)}행 중 공지 제외)")
+    log(f"  검색 결과 {len(rows)}건")
 
-    for row in rows[:100]:
+    for row in rows:
         try:
             title_el = row.query_selector("a.article")
             date_el  = row.query_selector("td.td_normal.type_date")
@@ -260,8 +218,7 @@ def get_post_list(page, cafe_id, num_id):
             if not title:
                 continue
 
-            href    = title_el.get_attribute("href") or ""
-            # 새 URL: /f-e/cafes/28497937/articles/1441600
+            href = title_el.get_attribute("href") or ""
             if "/articles/" in href:
                 post_id = href.split("/articles/")[-1].split("?")[0]
             elif "articleid=" in href:
@@ -275,19 +232,41 @@ def get_post_list(page, cafe_id, num_id):
             date_str  = date_el.inner_text().strip() if date_el else ""
             post_time = parse_date(date_str)
 
+            # 24시간 초과 게시글은 중단 (검색결과는 최신순)
             if post_time < cutoff:
-                continue
+                break
 
             posts.append({
                 "post_id":   post_id,
                 "title":     title,
                 "url":       f"https://cafe.naver.com/f-e/cafes/{num_id}/articles/{post_id}",
                 "post_time": post_time,
+                "keyword":   keyword,
             })
         except Exception as e:
-            log(f"목록 파싱 오류: {e}")
+            log(f"  파싱 오류: {e}")
 
-    log(f"{TIME_WINDOW}시간 이내 게시글 {len(posts)}건 수집")
+    return posts
+
+
+def get_post_list(page, cafe_id, num_id):
+    """키워드별 검색으로 게시글 수집 (전체 목록 스캔 불필요)"""
+    all_posts = {}  # post_id 기준 중복 제거
+
+    for keyword in KEYWORDS:
+        results = search_keyword(page, cafe_id, num_id, keyword)
+        for p in results:
+            pid = p["post_id"]
+            if pid not in all_posts:
+                all_posts[pid] = p
+            else:
+                # 이미 있으면 키워드만 추가
+                existing_kw = all_posts[pid].get("keyword", "")
+                if keyword not in existing_kw:
+                    all_posts[pid]["keyword"] = existing_kw + ", " + keyword
+
+    posts = list(all_posts.values())
+    log(f"키워드 검색 완료: {len(posts)}건 수집 (중복 제거)")
     return posts
 
 # ─────────────────────────────────────────
@@ -299,10 +278,22 @@ def get_post_detail(page, post_url, cafe_id):
     page.goto(post_url, wait_until="networkidle")
     page.wait_for_timeout(3000)
 
-    # 새 URL 구조: iframe 없이 page 직접 사용
+    # 게시글 본문은 iframe#cafe_main 내부에 있음
     frame = page
+    try:
+        # cafe_main iframe 찾기
+        for f in page.frames:
+            if "articles" in f.url and "fromNext=true" in f.url:
+                frame = f
+                break
+        if frame == page:
+            # iframe 렌더링 대기
+            page.wait_for_selector("iframe#cafe_main", timeout=8000)
+            frame = page.frame(name="cafe_main") or page
+    except Exception:
+        frame = page
 
-    # 본문 (새 FE 구조 우선, 구 구조 fallback)
+    # 본문
     body = ""
     try:
         body_el = (frame.query_selector(".se-main-container") or
@@ -644,26 +635,22 @@ def main():
                 log(f"신규 게시글: {len(new_posts)}건")
                 total_crawled += len(new_posts)
 
-                # STEP 3: 본문 수집 + 키워드 탐지 + AI 분석
+                # STEP 3: 본문 수집 + AI 분석 (검색으로 이미 키워드 필터됨)
                 for post in new_posts:
 
-                    # 제목 키워드 먼저 확인 (대소문자 무시)
-                    matched = next((kw for kw in KEYWORDS if kw.lower() in post["title"].lower()), None)
-
-                    # 본문 + 지표 수집
-                    body, views, comments, likes = get_post_detail(page, post["url"], cafe_id)
-
-                    # 본문 키워드 확인 (제목 미매칭 시, 대소문자 무시)
-                    if not matched:
-                        matched = next((kw for kw in KEYWORDS if kw.lower() in body.lower()), None)
-
-                    # 키워드 미매칭 → DB 기록 후 스킵
+                    # 검색 시 매칭된 키워드 사용 (없으면 제목에서 재확인)
+                    matched = post.get("keyword") or next(
+                        (kw for kw in KEYWORDS if kw.lower() in post["title"].lower()), None
+                    )
                     if not matched:
                         mark_seen(post["post_id"])
                         continue
 
                     total_keywords += 1
                     log(f"키워드 [{matched}] 탐지: {post['title'][:40]}...")
+
+                    # 본문 + 지표 수집
+                    body, views, comments, likes = get_post_detail(page, post["url"], cafe_id)
                     result = analyze_sentiment(post["title"], body, matched)
                     log(f"AI 결과 - 부정:{result['is_negative']} | 강도:{result['score']}/10")
 
