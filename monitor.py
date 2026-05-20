@@ -1,6 +1,6 @@
 """
 네이버 카페 부정여론 모니터링 (다중 카페)
-- 3시간 내 게시글 중 키워드(한국투자증권/한투/뱅키스/BanKIS) 탐지
+- 6시간 내 게시글 중 키워드(한국투자증권/한투/뱅키스/BanKIS) 탐지
 - Claude AI로 부정 뉘앙스 분석 및 요약
 - 부정 탐지 시 담당자 이메일 발송
 - 탐지 없음 / 오류 시 발신자 전용 상태 이메일 발송
@@ -12,6 +12,7 @@ import html
 import smtplib
 import traceback
 import re
+import sqlite3
 import time
 import urllib.parse
 import requests
@@ -41,7 +42,8 @@ CAFES = [
 ]
 
 KEYWORDS    = ["한국투자증권", "한투", "뱅키스", "BanKIS"]
-TIME_WINDOW = 3    # 탐지 범위 (시간)
+DB_FILE      = "seen_posts.db"
+TIME_WINDOW = 6    # 탐지 범위 (시간)
 
 # ─────────────────────────────────────────
 # 부정 강도 판단 기준 (score 0~10)
@@ -135,8 +137,32 @@ def send_status_email(status, detail=""):
     log(f"상태 이메일 발송 ({status}) → {GMAIL_USER}")
 
 # ─────────────────────────────────────────
-# 게시글 목록 수집
+# DB (중복 방지)
 # ─────────────────────────────────────────
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS seen_posts (
+            post_id TEXT PRIMARY KEY,
+            seen_at TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def is_new(post_id):
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute("SELECT 1 FROM seen_posts WHERE post_id=?", (post_id,)).fetchone()
+    conn.close()
+    return row is None
+
+def mark_seen(post_id):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("INSERT OR IGNORE INTO seen_posts VALUES (?,?)",
+                 (post_id, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
 
 def parse_date(date_str):
     now = datetime.now(KST)
@@ -162,7 +188,7 @@ def parse_date(date_str):
     return now
 
 def search_keyword(page, cafe_id, num_id, keyword):
-    """카페 인카페 검색으로 키워드 포함 게시글 수집 (24시간 이내)"""
+    """카페 인카페 검색으로 키워드 포함 게시글 수집 (6시간 이내)"""
     # 인카페 검색 URL (실제 확인된 구조)
     encoded = urllib.parse.quote(keyword)
     url = f"https://cafe.naver.com/f-e/cafes/{num_id}/menus/0?viewType=L&ta=ARTICLE_COMMENT&page=1&q={encoded}"
@@ -262,7 +288,7 @@ def get_post_list(page, cafe_id, num_id):
 # ─────────────────────────────────────────
 
 def get_post_detail(page, post_url, cafe_id):
-    """본문 텍스트 + 조회수·댓글수·공감수 반환"""
+    """본문 텍스트 반환"""
     # iframe 내부 URL로 직접 접근 (ca-fe 도메인)
     # post_url: https://cafe.naver.com/f-e/cafes/{num_id}/articles/{articleId}
     # → iframe src: https://cafe.naver.com/ca-fe/cafes/{num_id}/articles/{articleId}?fromNext=true
@@ -560,9 +586,9 @@ def main():
                 # STEP 1: 목록 수집
                 posts = get_post_list(page, cafe_id, num_id)
 
-                # STEP 2: 분석 대상
-                new_posts = posts
-                log(f"분석 대상: {len(new_posts)}건")
+                # STEP 2: 신규 여부 확인 (중복 제거)
+                new_posts = [p for p in posts if is_new(p["post_id"])]
+                log(f"신규 게시글: {len(new_posts)}건")
                 total_crawled += len(new_posts)
 
                 # STEP 3: 본문 수집 + AI 분석 (검색으로 이미 키워드 필터됨)
@@ -573,6 +599,7 @@ def main():
                         (kw for kw in KEYWORDS if kw.lower() in post["title"].lower()), None
                     )
                     if not matched:
+                        mark_seen(post["post_id"])
                         continue
 
                     total_keywords += 1
@@ -581,6 +608,7 @@ def main():
                     # 본문 + 지표 수집
                     body = get_post_detail(page, post["url"], cafe_id)
                     result = analyze_sentiment(post["title"], body, matched)
+                    mark_seen(post["post_id"])
                     log(f"AI 결과 - 부정:{result['is_negative']} | 강도:{result['score']}/10")
 
                     # score >= SCORE_THRESHOLD 인 경우만 알림 대상
