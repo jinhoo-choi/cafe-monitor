@@ -36,7 +36,7 @@ DB_FILE     = "seen_posts.db"
 
 CAFES = [
     {"id": "likeusstock", "num_id": "28497937", "name": "미국주식이 미래다"},
-    {"id": "vilab",       "num_id": "10050146", "name": "가치투자연구소"},
+    {"id": "vilab",       "num_id": "11525920", "name": "가치투자연구소"},
     {"id": "yamizal",     "num_id": "30676048", "name": "미주미(야미잘)"},
 ]
 
@@ -194,7 +194,7 @@ def search_keyword(page, cafe_id, num_id, keyword):
     # 인카페 검색 URL (실제 확인된 구조)
     import urllib.parse
     encoded = urllib.parse.quote(keyword)
-    url = f"https://cafe.naver.com/f-e/cafes/{num_id}/menus/0?viewType=L&ta=TITLE&page=1&q={encoded}"
+    url = f"https://cafe.naver.com/f-e/cafes/{num_id}/menus/0?viewType=L&ta=ARTICLE_COMMENT&page=1&q={encoded}"
     page.goto(url, wait_until="networkidle")
     page.wait_for_timeout(4000)
 
