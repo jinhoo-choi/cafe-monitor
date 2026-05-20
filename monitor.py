@@ -296,21 +296,19 @@ def get_post_list(page, cafe_id, num_id):
 
 def get_post_detail(page, post_url, cafe_id):
     """본문 텍스트 + 조회수·댓글수·공감수 반환"""
-    page.goto(post_url, wait_until="domcontentloaded")
-    page.wait_for_timeout(2000)
+    page.goto(post_url, wait_until="networkidle")
+    page.wait_for_timeout(3000)
 
-    frame = None
-    for f in page.frames:
-        if "ArticleRead" in f.url or cafe_id in f.url:
-            frame = f
-            break
-    if not frame:
-        frame = page.frames[-1] if len(page.frames) > 1 else page
+    # 새 URL 구조: iframe 없이 page 직접 사용
+    frame = page
 
-    # 본문
+    # 본문 (새 FE 구조 우선, 구 구조 fallback)
     body = ""
     try:
         body_el = (frame.query_selector(".se-main-container") or
+                   frame.query_selector(".ArticleContentBox") or
+                   frame.query_selector(".article-viewer") or
+                   frame.query_selector(".ContentRenderer") or
                    frame.query_selector("#tbody") or
                    frame.query_selector(".article_body"))
         if body_el:
@@ -319,6 +317,16 @@ def get_post_detail(page, post_url, cafe_id):
         log(f"본문 파싱 오류: {e}")
 
     if not body:
+        # 디버그: 첫 번째 게시글만 HTML 저장
+        try:
+            import os
+            debug_path = f"debug_article_{cafe_id}.html"
+            if not os.path.exists(debug_path):
+                with open(debug_path, "w", encoding="utf-8") as f:
+                    f.write(frame.content())
+                log(f"본문 디버그 HTML 저장: {debug_path}")
+        except Exception:
+            pass
         log("본문 비어 있음 - 제목만으로 AI 분석 진행")
 
     # 조회수
