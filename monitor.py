@@ -2,7 +2,7 @@
 네이버 카페 부정여론 모니터링 (다중 카페)
 - 6시간 내 게시글 중 키워드(한국투자증권/한투/뱅키스/BanKIS) 탐지
 - Claude AI로 부정 뉘앙스 분석 및 요약
-- 부정 탐지 시 담당자 이메일 발송
+- 키워드 탐지 게시글 전체 담당자 이메일 발송 (부정 강도 참고용)
 - 탐지 없음 / 오류 시 발신자 전용 상태 이메일 발송
 """
 
@@ -48,10 +48,11 @@ TIME_WINDOW = 6    # 탐지 범위 (시간)
 # ─────────────────────────────────────────
 # 부정 강도 판단 기준 (score 0~10)
 # ─────────────────────────────────────────
-# 0~3 : 단순 언급 / 중립 / 경미한 불만 → 알림 미발송
-# 4~6 : 명확한 불만·비판·피해 호소      → 알림 발송
-# 7~10: 강한 비판·확산 가능성 높음      → 알림 발송 (긴급)
-SCORE_THRESHOLD = 4   # 이 값 이상일 때만 담당자 알림 발송
+# 0~3 : 단순 언급 / 중립 / 경미한 불만
+# 4~6 : 명확한 불만·비판·피해 호소
+# 7~10: 강한 비판·확산 가능성 높음
+# ※ 현재는 키워드 탐지 게시글 전체 발송 (score는 이메일 카드에 참고 표시)
+SCORE_THRESHOLD = 4   # 향후 필터 재활성화 시 사용
 
 KST = timezone(timedelta(hours=9))
 
@@ -151,22 +152,26 @@ def init_db():
     conn.commit()
     conn.close()
 
-def is_new(post_id):
+def is_new(unique_id):
     conn = sqlite3.connect(DB_FILE)
-    row = conn.execute("SELECT 1 FROM seen_posts WHERE post_id=?", (post_id,)).fetchone()
+    row = conn.execute("SELECT 1 FROM seen_posts WHERE post_id=?", (unique_id,)).fetchone()
     conn.close()
     return row is None
 
-def mark_seen(post_id):
+def mark_seen(unique_id):
     conn = sqlite3.connect(DB_FILE)
     conn.execute("INSERT OR IGNORE INTO seen_posts VALUES (?,?)",
-                 (post_id, datetime.now().isoformat()))
+                 (unique_id, datetime.now().isoformat()))
     conn.commit()
     conn.close()
 
 def parse_date(date_str):
     now = datetime.now(KST)
     try:
+        if date_str == "방금":
+            return now
+        if date_str == "어제":
+            return now - timedelta(days=1)
         if "분 전" in date_str:
             return now - timedelta(minutes=int(date_str.replace("분 전", "").strip()))
         if "시간 전" in date_str:
@@ -231,13 +236,13 @@ def search_keyword(page, cafe_id, num_id, keyword):
             all_tds = row.query_selector_all("td")
             if len(all_tds) >= 4:
                 candidate = all_tds[3].inner_text().strip().split("\n")[0].strip()
-                if re.match(r"^(\d{1,2}:\d{2}|\d{4}\.\d{2}\.\d{2}\.?|\d+분 전|\d+시간 전)$", candidate):
+                if re.match(r"^(\d{1,2}:\d{2}|\d{4}\.\d{2}\.\d{2}\.?|\d+분 전|\d+시간 전|방금|어제)$", candidate):
                     date_str = candidate.rstrip(".")
             # 못 찾으면 전체 순회
             if not date_str:
                 for td in all_tds:
                     candidate = td.inner_text().strip().split("\n")[0].strip()
-                    if re.match(r"^(\d{1,2}:\d{2}|\d{4}\.\d{2}\.\d{2}\.?|\d+분 전|\d+시간 전)$", candidate):
+                    if re.match(r"^(\d{1,2}:\d{2}|\d{4}\.\d{2}\.\d{2}\.?|\d+분 전|\d+시간 전|방금|어제)$", candidate):
                         date_str = candidate.rstrip(".")
                         break
 
@@ -379,9 +384,11 @@ score는 부정 강도 (0=전혀 부정 아님, 10=매우 부정적)"""
                 log(f"AI API 오류: {resp['error'].get('message','')}")
                 return {"is_negative": False, "summary": "분석 실패", "score": 0}
         text = resp["content"][0]["text"].strip()
-        if "```" in text:
-            text = text.split("```")[1].replace("json", "").strip()
-        return json.loads(text)
+        # JSON 블록 추출 (설명 텍스트 섞여도 안전하게)
+        match = re.search(r'\{.*\}', text, re.S)
+        if not match:
+            raise ValueError("JSON 응답 없음")
+        return json.loads(match.group())
     except Exception as e:
         log(f"AI 분석 오류: {e}")
         return {"is_negative": False, "summary": "분석 실패", "score": 0}
@@ -392,7 +399,7 @@ score는 부정 강도 (0=전혀 부정 아님, 10=매우 부정적)"""
 
 def build_card(post, idx, total):
     title    = post["title"]
-    url      = post["url"]
+    url      = html.escape(post["url"], quote=True)
     keyword  = post["matched_kw"]
     score    = post["score"]
     summary  = post["summary"]
@@ -615,7 +622,7 @@ def main():
                 posts = get_post_list(page, cafe_id, num_id)
 
                 # STEP 2: 신규 여부 확인 (중복 제거)
-                new_posts = [p for p in posts if is_new(p["post_id"])]
+                new_posts = [p for p in posts if is_new(f"{cafe_id}:{p['post_id']}")]
                 log(f"신규 게시글: {len(new_posts)}건")
                 total_crawled += len(new_posts)
 
@@ -627,7 +634,7 @@ def main():
                         (kw for kw in KEYWORDS if kw.lower() in post["title"].lower()), None
                     )
                     if not matched:
-                        mark_seen(post["post_id"])
+                        mark_seen(f"{cafe_id}:{post['post_id']}")
                         continue
 
                     total_keywords += 1
@@ -636,7 +643,9 @@ def main():
                     # 본문 + 지표 수집
                     body = get_post_detail(page, post["url"], cafe_id)
                     result = analyze_sentiment(post["title"], body, matched)
-                    mark_seen(post["post_id"])
+                    # AI 분석 성공 시만 seen 처리 (실패 시 다음 실행에서 재시도)
+                    if result["summary"] != "분석 실패":
+                        mark_seen(f"{cafe_id}:{post['post_id']}")
                     log(f"AI 결과 - 부정:{result['is_negative']} | 강도:{result['score']}/10")
 
                     # 키워드 탐지된 모든 게시글 알림 발송
