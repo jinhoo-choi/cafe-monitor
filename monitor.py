@@ -1,6 +1,6 @@
 """
 네이버 카페 부정여론 모니터링 (다중 카페)
-- 24시간 내 게시글 중 키워드(한국투자증권/한투/뱅키스/BanKIS) 탐지
+- 3시간 내 게시글 중 키워드(한국투자증권/한투/뱅키스/BanKIS) 탐지
 - Claude AI로 부정 뉘앙스 분석 및 요약
 - 부정 탐지 시 담당자 이메일 발송
 - 탐지 없음 / 오류 시 발신자 전용 상태 이메일 발송
@@ -9,9 +9,11 @@
 import os
 import json
 import html
-import sqlite3
 import smtplib
 import traceback
+import re
+import time
+import urllib.parse
 import requests
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -28,8 +30,6 @@ NOTIFY_EMAIL   = os.environ["NOTIFY_EMAIL"]
 CLAUDE_API_KEY = os.environ["CLAUDE_API_KEY"]
 
 COOKIE_FILE = "naver_cookies.json"
-DB_FILE     = "seen_posts.db"
-
 # ─────────────────────────────────────────
 # 카페 설정 (다중 카페)
 # ─────────────────────────────────────────
@@ -41,7 +41,7 @@ CAFES = [
 ]
 
 KEYWORDS    = ["한국투자증권", "한투", "뱅키스", "BanKIS"]
-TIME_WINDOW = 48   # 탐지 범위 (시간)
+TIME_WINDOW = 3    # 탐지 범위 (시간)
 
 # ─────────────────────────────────────────
 # 부정 강도 판단 기준 (score 0~10)
@@ -49,7 +49,7 @@ TIME_WINDOW = 48   # 탐지 범위 (시간)
 # 0~3 : 단순 언급 / 중립 / 경미한 불만 → 알림 미발송
 # 4~6 : 명확한 불만·비판·피해 호소      → 알림 발송
 # 7~10: 강한 비판·확산 가능성 높음      → 알림 발송 (긴급)
-SCORE_THRESHOLD = 1   # 이 값 이상일 때만 담당자 알림 발송
+SCORE_THRESHOLD = 4   # 이 값 이상일 때만 담당자 알림 발송
 
 KST = timezone(timedelta(hours=9))
 
@@ -59,34 +59,6 @@ KST = timezone(timedelta(hours=9))
 
 def log(msg):
     print(f"[{datetime.now(KST).strftime('%H:%M:%S')}] {msg}")
-
-# ─────────────────────────────────────────
-# DB (중복 방지)
-# ─────────────────────────────────────────
-
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS seen_posts (
-            post_id TEXT PRIMARY KEY,
-            seen_at TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
-
-def is_new(post_id):
-    conn = sqlite3.connect(DB_FILE)
-    row = conn.execute("SELECT 1 FROM seen_posts WHERE post_id=?", (post_id,)).fetchone()
-    conn.close()
-    return row is None
-
-def mark_seen(post_id):
-    conn = sqlite3.connect(DB_FILE)
-    conn.execute("INSERT OR IGNORE INTO seen_posts VALUES (?,?)",
-                 (post_id, datetime.now().isoformat()))
-    conn.commit()
-    conn.close()
 
 # ─────────────────────────────────────────
 # 상태 이메일 (발신자 전용: 탐지 없음 / 오류)
@@ -192,7 +164,6 @@ def parse_date(date_str):
 def search_keyword(page, cafe_id, num_id, keyword):
     """카페 인카페 검색으로 키워드 포함 게시글 수집 (24시간 이내)"""
     # 인카페 검색 URL (실제 확인된 구조)
-    import urllib.parse
     encoded = urllib.parse.quote(keyword)
     url = f"https://cafe.naver.com/f-e/cafes/{num_id}/menus/0?viewType=L&ta=ARTICLE_COMMENT&page=1&q={encoded}"
     page.goto(url, wait_until="networkidle")
@@ -206,15 +177,6 @@ def search_keyword(page, cafe_id, num_id, keyword):
     all_rows = page.query_selector_all("table.article-table tbody tr")
     rows = [r for r in all_rows if "board-notice" not in (r.get_attribute("class") or "")]
     log(f"  검색 결과 {len(rows)}건")
-
-    # 첫 번째 행 td 내용 로그로 확인
-    if rows:
-        try:
-            tds = rows[0].query_selector_all("td")
-            td_texts = [td.inner_text().strip()[:20] for td in tds]
-            log(f"  첫행 td 내용: {td_texts}")
-        except Exception:
-            pass
 
     for row in rows:
         try:
@@ -238,7 +200,6 @@ def search_keyword(page, cafe_id, num_id, keyword):
             if not post_id or not post_id.isdigit():
                 continue
 
-            import re
             date_str = ""
             # td[3]이 날짜 칸 (0:번호, 1:제목, 2:작성자, 3:날짜, 4:조회수)
             all_tds = row.query_selector_all("td")
@@ -377,7 +338,7 @@ score는 부정 강도 (0=전혀 부정 아님, 10=매우 부정적)"""
             err_type = resp["error"].get("type", "")
             if err_type == "overloaded_error":
                 log("AI Overloaded - 10초 후 재시도")
-                import time; time.sleep(10)
+                time.sleep(10)
                 response = requests.post(
                     "https://api.anthropic.com/v1/messages",
                     headers={"x-api-key": CLAUDE_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
@@ -560,7 +521,6 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count):
 # ─────────────────────────────────────────
 
 def main():
-    init_db()
     log("=" * 48)
     log(f"모니터링 시작 | {len(CAFES)}개 카페")
     log(f"탐지 키워드: {', '.join(KEYWORDS)}")
@@ -600,9 +560,9 @@ def main():
                 # STEP 1: 목록 수집
                 posts = get_post_list(page, cafe_id, num_id)
 
-                # STEP 2: 신규 여부 확인
-                new_posts = [p for p in posts if is_new(p["post_id"])]
-                log(f"신규 게시글: {len(new_posts)}건")
+                # STEP 2: 분석 대상
+                new_posts = posts
+                log(f"분석 대상: {len(new_posts)}건")
                 total_crawled += len(new_posts)
 
                 # STEP 3: 본문 수집 + AI 분석 (검색으로 이미 키워드 필터됨)
@@ -613,7 +573,6 @@ def main():
                         (kw for kw in KEYWORDS if kw.lower() in post["title"].lower()), None
                     )
                     if not matched:
-                        mark_seen(post["post_id"])
                         continue
 
                     total_keywords += 1
@@ -623,9 +582,6 @@ def main():
                     body = get_post_detail(page, post["url"], cafe_id)
                     result = analyze_sentiment(post["title"], body, matched)
                     log(f"AI 결과 - 부정:{result['is_negative']} | 강도:{result['score']}/10")
-
-                    # AI 분석까지 완료 후 DB 기록
-                    mark_seen(post["post_id"])
 
                     # score >= SCORE_THRESHOLD 인 경우만 알림 대상
                     if result["is_negative"] and result["score"] >= SCORE_THRESHOLD:
