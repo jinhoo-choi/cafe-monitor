@@ -244,47 +244,15 @@ def get_post_list(page, cafe_id, num_id):
     cutoff = datetime.now(KST) - timedelta(hours=TIME_WINDOW)
     posts  = []
 
-    rows = frame.query_selector_all("tr.article")
-    if not rows:
-        rows = frame.query_selector_all("[data-article-id]")
-    if not rows:
-        rows = frame.query_selector_all(".article-board-list tr")
-    if not rows:
-        rows = frame.query_selector_all(".board-list li")
-    if not rows:
-        rows = frame.query_selector_all("li.board-list-item")
-    if not rows:
-        rows = frame.query_selector_all(".article_wrap")
-    if not rows:
-        rows = frame.query_selector_all("ul.article-board > li")
-    if not rows:
-        rows = frame.query_selector_all(".cafe-list-item")
-
-    log(f"게시글 행 {len(rows)}개 감지")
-
-    if not rows:
-        try:
-            with open(f"debug_{cafe_id}.html", "w", encoding="utf-8") as f:
-                f.write(frame.content())
-            log(f"디버그 HTML 저장: debug_{cafe_id}.html")
-        except Exception as e:
-            log(f"디버그 HTML 저장 실패: {e}")
+    # 확인된 실제 구조: table.article-table tbody tr (board-notice 제외)
+    all_rows = frame.query_selector_all("table.article-table tbody tr")
+    rows = [r for r in all_rows if "board-notice" not in (r.get_attribute("class") or "")]
+    log(f"게시글 행 {len(rows)}개 감지 (전체 {len(all_rows)}행 중 공지 제외)")
 
     for row in rows[:100]:
         try:
-            # 새 구조 대응: articles 링크에서 직접 파싱
-            if row.tag_name == "a":
-                title_el = row
-                date_el  = None
-            else:
-                title_el = (row.query_selector("a.article") or
-                            row.query_selector("td.td_article a") or
-                            row.query_selector("a[href*='/articles/']") or
-                            row.query_selector("a[href*='articleid=']"))
-                date_el  = (row.query_selector("td.td_date") or
-                            row.query_selector(".date") or
-                            row.query_selector(".article-date") or
-                            row.query_selector("time"))
+            title_el = row.query_selector("a.article")
+            date_el  = row.query_selector("td.td_normal.type_date")
             if not title_el:
                 continue
 
