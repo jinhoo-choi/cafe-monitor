@@ -37,7 +37,7 @@ DB_FILE     = "seen_posts.db"
 CAFES = [
     {"id": "likeusstock", "num_id": "28497937", "name": "미국주식이 미래다"},
     {"id": "vilab",       "num_id": "10050146", "name": "가치투자연구소"},
-    {"id": "yamizal",     "num_id": "30157532", "name": "미주미(야미잘)"},
+    {"id": "yamizal",     "num_id": "30676048", "name": "미주미(야미잘)"},
 ]
 
 KEYWORDS    = ["한국투자증권", "한투", "뱅키스", "BanKIS"]
@@ -275,25 +275,16 @@ def get_post_list(page, cafe_id, num_id):
 
 def get_post_detail(page, post_url, cafe_id):
     """본문 텍스트 + 조회수·댓글수·공감수 반환"""
-    page.goto(post_url, wait_until="networkidle")
+    # iframe 내부 URL로 직접 접근 (ca-fe 도메인)
+    # post_url: https://cafe.naver.com/f-e/cafes/{num_id}/articles/{articleId}
+    # → iframe src: https://cafe.naver.com/ca-fe/cafes/{num_id}/articles/{articleId}?fromNext=true
+    inner_url = post_url.replace("/f-e/cafes/", "/ca-fe/cafes/") + "?fromNext=true"
+    page.goto(inner_url, wait_until="networkidle")
     page.wait_for_timeout(3000)
 
-    # 게시글 본문은 iframe#cafe_main 내부에 있음
     frame = page
-    try:
-        # cafe_main iframe 찾기
-        for f in page.frames:
-            if "articles" in f.url and "fromNext=true" in f.url:
-                frame = f
-                break
-        if frame == page:
-            # iframe 렌더링 대기
-            page.wait_for_selector("iframe#cafe_main", timeout=8000)
-            frame = page.frame(name="cafe_main") or page
-    except Exception:
-        frame = page
 
-    # 본문
+    # 본문 셀렉터 (새 FE 구조)
     body = ""
     try:
         body_el = (frame.query_selector(".se-main-container") or
@@ -301,23 +292,14 @@ def get_post_detail(page, post_url, cafe_id):
                    frame.query_selector(".article-viewer") or
                    frame.query_selector(".ContentRenderer") or
                    frame.query_selector("#tbody") or
-                   frame.query_selector(".article_body"))
+                   frame.query_selector(".article_body") or
+                   frame.query_selector(".se-component-content"))
         if body_el:
             body = body_el.inner_text().strip()[:2000]
     except Exception as e:
         log(f"본문 파싱 오류: {e}")
 
     if not body:
-        # 디버그: 첫 번째 게시글만 HTML 저장
-        try:
-            import os
-            debug_path = f"debug_article_{cafe_id}.html"
-            if not os.path.exists(debug_path):
-                with open(debug_path, "w", encoding="utf-8") as f:
-                    f.write(frame.content())
-                log(f"본문 디버그 HTML 저장: {debug_path}")
-        except Exception:
-            pass
         log("본문 비어 있음 - 제목만으로 AI 분석 진행")
 
     # 조회수
