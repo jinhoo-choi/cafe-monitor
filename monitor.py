@@ -194,7 +194,7 @@ def search_keyword(page, cafe_id, num_id, keyword):
     # 인카페 검색 URL (실제 확인된 구조)
     import urllib.parse
     encoded = urllib.parse.quote(keyword)
-    url = f"https://cafe.naver.com/f-e/cafes/{num_id}/menus/0?viewType=L&ta=ARTICLE_COMMENT&page=1&q={encoded}"
+    url = f"https://cafe.naver.com/f-e/cafes/{num_id}/menus/0?viewType=L&ta=TITLE&page=1&q={encoded}"
     page.goto(url, wait_until="networkidle")
     page.wait_for_timeout(4000)
 
@@ -399,7 +399,7 @@ score는 부정 강도 (0=전혀 부정 아님, 10=매우 부정적)"""
                 "content-type": "application/json",
             },
             json={
-                "model": "claude-sonnet-4-20250514",
+                "model": "claude-haiku-4-5-20251001",
                 "max_tokens": 300,
                 "messages": [{"role": "user", "content": prompt}],
             },
