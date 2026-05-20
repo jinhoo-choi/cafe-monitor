@@ -191,11 +191,12 @@ def parse_date(date_str):
 def get_post_list(page, cafe_id):
     url = f"https://cafe.naver.com/{cafe_id}"
     page.goto(url, wait_until="domcontentloaded")
-    page.wait_for_timeout(2000)
+    page.wait_for_timeout(5000)   # 5초로 증가
 
+    # iframe 접근
     frame = None
     for f in page.frames:
-        if cafe_id in f.url and f.url != url:
+        if cafe_id in f.url and f.url != url and "about:blank" not in f.url:
             frame = f
             break
     if not frame:
@@ -203,10 +204,26 @@ def get_post_list(page, cafe_id):
             if "ArticleList" in f.url or "articles" in f.url:
                 frame = f
                 break
-    if not frame:
-        frame = page.frames[-1] if len(page.frames) > 1 else page
+    # iframe 못 찾으면 추가 대기 후 재시도
+    if not frame or "about:blank" in frame.url:
+        log("iframe 미감지 - 추가 대기 후 재시도")
+        page.wait_for_timeout(5000)
+        for f in page.frames:
+            if cafe_id in f.url and "about:blank" not in f.url:
+                frame = f
+                break
+    if not frame or "about:blank" in frame.url:
+        frame = page
 
-    log(f"접속 frame: {frame.url[:60]}")
+    log(f"접속 frame: {frame.url[:80]}")
+
+    # 디버깅: 전체 HTML 저장
+    try:
+        with open(f"debug_{cafe_id}.html", "w", encoding="utf-8") as f:
+            f.write(frame.content())
+        log(f"디버그 HTML 저장 완료: debug_{cafe_id}.html")
+    except Exception as e:
+        log(f"디버그 HTML 저장 실패: {e}")
 
     cutoff = datetime.now(KST) - timedelta(hours=TIME_WINDOW)
     posts  = []
@@ -574,6 +591,13 @@ def main():
             log("쿠키 파일로 접속")
             context = browser.new_context(storage_state=COOKIE_FILE)
             page    = context.new_page()
+
+            # 로그인 상태 확인
+            page.goto("https://www.naver.com", wait_until="domcontentloaded")
+            page.wait_for_timeout(2000)
+            if "nid.naver.com" in page.url:
+                raise RuntimeError("쿠키 만료 - NAVER_COOKIES_JSON Secret 재등록 필요")
+            log("로그인 상태 확인 완료")
 
             total_crawled  = 0
             total_keywords = 0
