@@ -207,6 +207,17 @@ def search_keyword(page, cafe_id, num_id, keyword):
     rows = [r for r in all_rows if "board-notice" not in (r.get_attribute("class") or "")]
     log(f"  검색 결과 {len(rows)}건")
 
+    # 첫 번째 행에서 날짜 셀렉터 확인용 디버그
+    if rows:
+        try:
+            import os
+            debug_path = f"debug_search_{cafe_id}.html"
+            if not os.path.exists(debug_path):
+                with open(debug_path, "w", encoding="utf-8") as f:
+                    f.write(page.content())
+        except Exception:
+            pass
+
     for row in rows:
         try:
             title_el = row.query_selector("a.article")
@@ -230,6 +241,11 @@ def search_keyword(page, cafe_id, num_id, keyword):
                 continue
 
             date_str  = date_el.inner_text().strip() if date_el else ""
+
+            # 날짜 없으면 스킵 (cutoff 오판 방지)
+            if not date_str:
+                continue
+
             post_time = parse_date(date_str)
 
             # 24시간 초과 게시글은 중단 (검색결과는 최신순)
@@ -302,53 +318,7 @@ def get_post_detail(page, post_url, cafe_id):
     if not body:
         log("본문 비어 있음 - 제목만으로 AI 분석 진행")
 
-    # 조회수
-    views = "-"
-    try:
-        for sel in [".article_header .count", ".ArticleViewArea .body_info .view_count",
-                    "em.visited", ".article-view-info .count_info",
-                    "span.count", ".article_view .right_area strong"]:
-            el = frame.query_selector(sel)
-            if el:
-                txt = el.inner_text().strip().replace(",", "")
-                if txt.isdigit():
-                    views = f"{int(txt):,}"
-                    break
-    except Exception:
-        pass
-
-    # 댓글수
-    comments = "-"
-    try:
-        for sel in [".ArticleCommentView .comment_count strong",
-                    ".cmt_info .count", ".comment_area .count_comment",
-                    "span.count_comment", ".CommentCount"]:
-            el = frame.query_selector(sel)
-            if el:
-                txt = el.inner_text().strip().replace(",", "")
-                if txt.isdigit():
-                    comments = f"{int(txt):,}"
-                    break
-    except Exception:
-        pass
-
-    # 공감수
-    likes = "-"
-    try:
-        for sel in [".sympathy_area .num", ".like_count strong",
-                    ".btn_like .count", ".ArticleTool .count_like",
-                    "em.u_cnt._count"]:
-            el = frame.query_selector(sel)
-            if el:
-                txt = el.inner_text().strip().replace(",", "")
-                if txt.isdigit():
-                    likes = f"{int(txt):,}"
-                    break
-    except Exception:
-        pass
-
-    log(f"지표 수집 완료 - 조회:{views} 댓글:{comments} 공감:{likes}")
-    return body, views, comments, likes
+    return body
 
 # ─────────────────────────────────────────
 # Claude AI 감성 분석
@@ -405,9 +375,6 @@ def build_card(post, idx, total):
     keyword  = post["matched_kw"]
     score    = post["score"]
     summary  = post["summary"]
-    views    = post.get("views", "-")
-    comments = post.get("comments", "-")
-    likes    = post.get("likes", "-")
     post_dt  = post.get("post_time")
     date_str = post_dt.strftime("%Y.%m.%d %H:%M") if post_dt else "-"
 
@@ -462,19 +429,6 @@ def build_card(post, idx, total):
                           color:#c62828;letter-spacing:0.6px;">✦ AI 요약</p>
                 <p style="margin:0;font-size:13px;color:#555;line-height:1.8;">{summary}</p>
               </td>
-            </tr>
-          </table>
-
-          <table cellpadding="0" cellspacing="0" border="0">
-            <tr>
-              <td style="font-size:10px;font-weight:bold;color:#bbb;padding-right:4px;">조회</td>
-              <td style="font-size:12px;font-weight:bold;color:#222;padding-right:8px;">{views}</td>
-              <td style="color:#e0e0e0;padding-right:8px;">|</td>
-              <td style="font-size:10px;font-weight:bold;color:#bbb;padding-right:4px;">댓글</td>
-              <td style="font-size:12px;font-weight:bold;color:#c62828;padding-right:8px;">{comments}</td>
-              <td style="color:#e0e0e0;padding-right:8px;">|</td>
-              <td style="font-size:10px;font-weight:bold;color:#bbb;padding-right:4px;">공감</td>
-              <td style="font-size:12px;font-weight:bold;color:#222;">{likes}</td>
             </tr>
           </table>
 
@@ -632,7 +586,7 @@ def main():
                     log(f"키워드 [{matched}] 탐지: {post['title'][:40]}...")
 
                     # 본문 + 지표 수집
-                    body, views, comments, likes = get_post_detail(page, post["url"], cafe_id)
+                    body = get_post_detail(page, post["url"], cafe_id)
                     result = analyze_sentiment(post["title"], body, matched)
                     log(f"AI 결과 - 부정:{result['is_negative']} | 강도:{result['score']}/10")
 
@@ -646,9 +600,6 @@ def main():
                         post["score"]      = result["score"]
                         post["summary"]    = html.escape(result["summary"])
                         post["title"]      = html.escape(post["title"])
-                        post["views"]      = views
-                        post["comments"]   = comments
-                        post["likes"]      = likes
                         all_alerts.append(post)
 
             browser.close()
