@@ -1,0 +1,4 @@
+naver_cookies.json
+__pycache__/
+*.log
+*.pyc
