@@ -242,15 +242,15 @@ def search_keyword(page, cafe_id, num_id, keyword):
 
             date_str  = date_el.inner_text().strip() if date_el else ""
 
-            # 날짜 없으면 오늘로 처리 (검색결과는 최신글 위주라 통과시킴)
+            # 날짜 없으면 스킵
             if not date_str:
-                post_time = datetime.now(KST)
-            else:
-                post_time = parse_date(date_str)
+                continue
 
-            # 24시간 초과 게시글은 중단 (검색결과는 최신순)
+            post_time = parse_date(date_str)
+
+            # cutoff 초과 게시글 스킵 (검색결과가 최신순 보장 안 되므로 break 대신 continue)
             if post_time < cutoff:
-                break
+                continue
 
             posts.append({
                 "post_id":   post_id,
