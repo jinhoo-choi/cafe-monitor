@@ -2,11 +2,11 @@ name: 네이버 카페 부정여론 모니터링
 
 on:
   schedule:
-    - cron: '0 */3 * * *'   # 3시간마다 실행 (UTC 0, 3, 6, 9, 12, 15, 18, 21시)
+    - cron: '7 * * * *'     # 매시 7분 실행 (KST 기준 매시 7분)
   workflow_dispatch:          # 수동 실행 가능
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: naver-cafe-monitor
@@ -46,3 +46,14 @@ jobs:
           NOTIFY_EMAIL:   ${{ secrets.NOTIFY_EMAIL }}
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
         run: python monitor.py
+
+      - name: DB 변경사항 커밋
+        if: always()
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add seen_posts.db || true
+          git diff --cached --quiet || git commit -m "update seen_posts.db"
+          git pull --rebase || true
+          git push || true
+
