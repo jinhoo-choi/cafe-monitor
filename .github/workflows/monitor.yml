@@ -52,7 +52,7 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git add seen_posts.db || true
-          git diff --cached --quiet || git commit -m "update seen posts db"
+          git add seen_posts.db debug_*.html || true
+          git diff --cached --quiet || git commit -m "update seen posts db + debug html"
           git pull --rebase || true
           git push || true
