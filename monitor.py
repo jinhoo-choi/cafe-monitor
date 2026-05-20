@@ -1,6 +1,6 @@
 """
-미국주식이 미래다 네이버 카페 모니터링
-- 3시간 내 게시글 중 키워드(한국투자증권/한투/뱅키스) 탐지
+네이버 카페 부정여론 모니터링 (다중 카페)
+- 24시간 내 게시글 중 키워드(한국투자증권/한투/뱅키스/BanKIS) 탐지
 - Claude AI로 부정 뉘앙스 분석 및 요약
 - 부정 탐지 시 담당자 이메일 발송
 - 탐지 없음 / 오류 시 발신자 전용 상태 이메일 발송
@@ -41,7 +41,7 @@ CAFES = [
 ]
 
 KEYWORDS    = ["한국투자증권", "한투", "뱅키스", "BanKIS"]
-TIME_WINDOW = 3   # 탐지 범위 (시간)
+TIME_WINDOW = 24   # 탐지 범위 (시간)
 
 # ─────────────────────────────────────────
 # 부정 강도 판단 기준 (score 0~10)
@@ -110,7 +110,7 @@ def send_status_email(status, detail=""):
         color    = "#b71c1c"
         title    = "실행 오류 발생"
 
-    html = f"""<!DOCTYPE html>
+    html_body = f"""<!DOCTYPE html>
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
@@ -128,7 +128,7 @@ def send_status_email(status, detail=""):
         <td style="background:{color};padding:20px 28px;">
           <p style="margin:0 0 4px 0;font-size:16px;font-weight:bold;color:#fff;">{title}</p>
           <p style="margin:0;font-size:11px;color:rgba(255,255,255,0.7);">
-            {CAFE_NAME} &nbsp;&middot;&nbsp; {now_str} KST
+            네이버 카페 부정여론 탐지봇 &nbsp;&middot;&nbsp; {now_str} KST
           </p>
         </td>
       </tr>
@@ -155,7 +155,7 @@ def send_status_email(status, detail=""):
     msg["Subject"] = subject
     msg["From"]    = GMAIL_USER
     msg["To"]      = GMAIL_USER   # 발신자에게만
-    msg.attach(MIMEText(html, "html", "utf-8"))
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(GMAIL_USER, GMAIL_APP_PW)
