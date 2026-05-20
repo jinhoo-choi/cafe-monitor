@@ -49,7 +49,7 @@ TIME_WINDOW = 24   # 탐지 범위 (시간)
 # 0~3 : 단순 언급 / 중립 / 경미한 불만 → 알림 미발송
 # 4~6 : 명확한 불만·비판·피해 호소      → 알림 발송
 # 7~10: 강한 비판·확산 가능성 높음      → 알림 발송 (긴급)
-SCORE_THRESHOLD = 4   # 이 값 이상일 때만 담당자 알림 발송
+SCORE_THRESHOLD = 1   # 이 값 이상일 때만 담당자 알림 발송
 
 KST = timezone(timedelta(hours=9))
 
@@ -199,7 +199,14 @@ def get_post_list(page, cafe_id):
             frame = f
             break
     if not frame:
+        for f in page.frames:
+            if "ArticleList" in f.url or "articles" in f.url:
+                frame = f
+                break
+    if not frame:
         frame = page.frames[-1] if len(page.frames) > 1 else page
+
+    log(f"접속 frame: {frame.url[:60]}")
 
     cutoff = datetime.now(KST) - timedelta(hours=TIME_WINDOW)
     posts  = []
@@ -207,6 +214,14 @@ def get_post_list(page, cafe_id):
     rows = frame.query_selector_all("tr.article")
     if not rows:
         rows = frame.query_selector_all("[data-article-id]")
+    if not rows:
+        rows = frame.query_selector_all(".article-board-list tr")
+    if not rows:
+        rows = frame.query_selector_all(".board-list li")
+    if not rows:
+        rows = frame.query_selector_all(".cafe-board-list tr")
+
+    log(f"게시글 행 {len(rows)}개 감지")
 
     for row in rows[:100]:
         try:
@@ -237,7 +252,7 @@ def get_post_list(page, cafe_id):
         except Exception as e:
             log(f"목록 파싱 오류: {e}")
 
-    log(f"3시간 이내 게시글 {len(posts)}건 수집")
+    log(f"{TIME_WINDOW}시간 이내 게시글 {len(posts)}건 수집")
     return posts
 
 # ─────────────────────────────────────────
