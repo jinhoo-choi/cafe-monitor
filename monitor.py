@@ -29,6 +29,7 @@ GMAIL_USER     = os.environ["GMAIL_USER"]
 GMAIL_APP_PW   = os.environ["GMAIL_APP_PW"]
 NOTIFY_EMAIL   = os.environ["NOTIFY_EMAIL"]
 CLAUDE_API_KEY = os.environ["CLAUDE_API_KEY"]
+CLAUDE_MODEL   = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
 
 COOKIE_FILE = "naver_cookies.json"
 # ─────────────────────────────────────────
@@ -53,6 +54,7 @@ TIME_WINDOW = 6    # 탐지 범위 (시간)
 # 7~10: 강한 비판·확산 가능성 높음
 # ※ 현재는 키워드 탐지 게시글 전체 발송 (score는 이메일 카드에 참고 표시)
 SCORE_THRESHOLD = 4   # 향후 필터 재활성화 시 사용
+MAX_ALERTS     = 30   # 이메일 발송 최대 건수 제한
 
 KST = timezone(timedelta(hours=9))
 
@@ -205,8 +207,13 @@ def search_keyword(page, cafe_id, num_id, keyword):
     cutoff = datetime.now(KST) - timedelta(hours=TIME_WINDOW)
     posts  = []
 
-    all_rows = page.query_selector_all("table.article-table tbody tr")
-    rows = [r for r in all_rows if "board-notice" not in (r.get_attribute("class") or "")]
+    # 셀렉터 fallback (네이버 FE 구조 변경 대응)
+    rows = []
+    for sel in ["table.article-table tbody tr", ".article-board tbody tr", ".ArticleItem"]:
+        all_rows = page.query_selector_all(sel)
+        if all_rows:
+            rows = [r for r in all_rows if "board-notice" not in (r.get_attribute("class") or "")]
+            break
     log(f"  검색 결과 {len(rows)}건")
 
     for row in rows:
@@ -358,7 +365,7 @@ score는 부정 강도 (0=전혀 부정 아님, 10=매우 부정적)"""
                 "content-type": "application/json",
             },
             json={
-                "model": "claude-haiku-4-5-20251001",
+                "model": CLAUDE_MODEL,
                 "max_tokens": 300,
                 "messages": [{"role": "user", "content": prompt}],
             },
@@ -373,7 +380,7 @@ score는 부정 강도 (0=전혀 부정 아님, 10=매우 부정적)"""
                 response = requests.post(
                     "https://api.anthropic.com/v1/messages",
                     headers={"x-api-key": CLAUDE_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                    json={"model": "claude-haiku-4-5-20251001", "max_tokens": 300, "messages": [{"role": "user", "content": prompt}]},
+                    json={"model": CLAUDE_MODEL, "max_tokens": 300, "messages": [{"role": "user", "content": prompt}]},
                     timeout=30,
                 )
                 resp = response.json()
@@ -398,11 +405,11 @@ score는 부정 강도 (0=전혀 부정 아님, 10=매우 부정적)"""
 # ─────────────────────────────────────────
 
 def build_card(post, idx, total):
-    title    = post["title"]
+    title    = html.escape(post["title"])
     url      = html.escape(post["url"], quote=True)
-    keyword  = post["matched_kw"]
+    keyword  = html.escape(post["matched_kw"])
     score    = post["score"]
-    summary  = post["summary"]
+    summary  = html.escape(post["summary"])
     post_dt  = post.get("post_time")
     date_str = post_dt.strftime("%Y.%m.%d %H:%M") if post_dt else "-"
 
@@ -650,10 +657,9 @@ def main():
 
                     # 키워드 탐지된 모든 게시글 알림 발송
                     post["cafe_name"]  = cafe_name
-                    post["matched_kw"] = html.escape(matched)
+                    post["matched_kw"] = matched
                     post["score"]      = result["score"]
-                    post["summary"]    = html.escape(result["summary"])
-                    post["title"]      = html.escape(post["title"])
+                    post["summary"]    = result["summary"]
                     all_alerts.append(post)
 
             browser.close()
@@ -661,6 +667,9 @@ def main():
             # STEP 4: 결과에 따라 이메일 분기
             log(f"\n크롤링 {total_crawled}건 → 키워드 탐지 {total_keywords}건 → AI 필터링 {len(all_alerts)}건")
             if all_alerts:
+                if len(all_alerts) > MAX_ALERTS:
+                    log(f"알림 건수 초과 — {len(all_alerts)}건 중 {MAX_ALERTS}건만 발송")
+                    all_alerts = all_alerts[:MAX_ALERTS]
                 send_alert_batch(
                     all_alerts,
                     crawled_count=total_crawled,
