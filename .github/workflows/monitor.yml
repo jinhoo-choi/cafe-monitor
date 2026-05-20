@@ -6,7 +6,7 @@ on:
   workflow_dispatch:          # 수동 실행 가능
 
 permissions:
-  contents: write             # seen_posts.db 커밋을 위해 필요
+  contents: read
 
 concurrency:
   group: naver-cafe-monitor
@@ -46,13 +46,3 @@ jobs:
           NOTIFY_EMAIL:   ${{ secrets.NOTIFY_EMAIL }}
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
         run: python monitor.py
-
-      - name: DB 변경사항 커밋
-        if: always()
-        run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add seen_posts.db debug_*.html || true
-          git diff --cached --quiet || git commit -m "update seen posts db + debug html"
-          git pull --rebase || true
-          git push || true
