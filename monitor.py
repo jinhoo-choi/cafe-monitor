@@ -240,13 +240,19 @@ def search_keyword(page, cafe_id, num_id, keyword):
 
             import re
             date_str = ""
-            # 모든 td 셀에서 날짜 형식 값 탐색
+            # td[3]이 날짜 칸 (0:번호, 1:제목, 2:작성자, 3:날짜, 4:조회수)
             all_tds = row.query_selector_all("td")
-            for td in all_tds:
-                candidate = td.inner_text().strip()
-                if re.match(r"^(\d{1,2}:\d{2}|\d{4}\.\d{2}\.\d{2}|\d+분 전|\d+시간 전)$", candidate):
-                    date_str = candidate
-                    break
+            if len(all_tds) >= 4:
+                candidate = all_tds[3].inner_text().strip().split("\n")[0].strip()
+                if re.match(r"^(\d{1,2}:\d{2}|\d{4}\.\d{2}\.\d{2}\.?|\d+분 전|\d+시간 전)$", candidate):
+                    date_str = candidate.rstrip(".")
+            # 못 찾으면 전체 순회
+            if not date_str:
+                for td in all_tds:
+                    candidate = td.inner_text().strip().split("\n")[0].strip()
+                    if re.match(r"^(\d{1,2}:\d{2}|\d{4}\.\d{2}\.\d{2}\.?|\d+분 전|\d+시간 전)$", candidate):
+                        date_str = candidate.rstrip(".")
+                        break
 
             if not date_str:
                 post_time = datetime.now(KST)
