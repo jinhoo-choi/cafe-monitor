@@ -35,9 +35,9 @@ DB_FILE     = "seen_posts.db"
 # ─────────────────────────────────────────
 
 CAFES = [
-    {"id": "likeusstock", "name": "미국주식이 미래다"},
-    {"id": "vilab",       "name": "가치투자연구소"},
-    {"id": "yamizal",     "name": "미주미(야미잘)"},
+    {"id": "likeusstock", "num_id": "28497937", "name": "미국주식이 미래다"},
+    {"id": "vilab",       "num_id": "10050146", "name": "가치투자연구소"},
+    {"id": "yamizal",     "num_id": "30157532", "name": "미주미(야미잘)"},
 ]
 
 KEYWORDS    = ["한국투자증권", "한투", "뱅키스", "BanKIS"]
@@ -188,18 +188,13 @@ def parse_date(date_str):
         pass
     return now
 
-def get_post_list(page, cafe_id):
-    # 전체글보기 직접 접근 (iframe 우회)
-    url = f"https://cafe.naver.com/ArticleList.nhn?search.clubid={cafe_id}&search.boardtype=L&search.page=1"
-    page.goto(url, wait_until="domcontentloaded")
-    page.wait_for_timeout(3000)
+def get_post_list(page, cafe_id, num_id):
+    # 새 네이버 카페 URL 구조 (숫자 ID 사용)
+    url = f"https://cafe.naver.com/f-e/cafes/{num_id}/menus/0?viewType=L&page=1"
+    page.goto(url, wait_until="networkidle")
+    page.wait_for_timeout(4000)
 
     frame = page
-    for f in page.frames:
-        if "ArticleList" in f.url and "about:blank" not in f.url:
-            frame = f
-            break
-
     log(f"접속 frame: {frame.url[:80]}")
 
     cutoff = datetime.now(KST) - timedelta(hours=TIME_WINDOW)
@@ -213,9 +208,25 @@ def get_post_list(page, cafe_id):
     if not rows:
         rows = frame.query_selector_all(".board-list li")
     if not rows:
-        rows = frame.query_selector_all(".cafe-board-list tr")
+        rows = frame.query_selector_all("li.board-list-item")
+    if not rows:
+        rows = frame.query_selector_all(".article_wrap")
+    if not rows:
+        # 새 FE 구조 대응
+        rows = frame.query_selector_all("ul.article-board > li")
+    if not rows:
+        rows = frame.query_selector_all(".cafe-list-item")
 
     log(f"게시글 행 {len(rows)}개 감지")
+
+    # 디버깅: 0건이면 HTML 저장
+    if not rows:
+        try:
+            with open(f"debug_{cafe_id}.html", "w", encoding="utf-8") as f:
+                f.write(frame.content())
+            log(f"디버그 HTML 저장: debug_{cafe_id}.html")
+        except Exception as e:
+            log(f"디버그 HTML 저장 실패: {e}")
 
     for row in rows[:100]:
         try:
@@ -583,11 +594,12 @@ def main():
             # 카페별 순차 실행
             for cafe in CAFES:
                 cafe_id   = cafe["id"]
+                num_id    = cafe["num_id"]
                 cafe_name = cafe["name"]
                 log(f"\n── {cafe_name} ({cafe_id}) ──")
 
                 # STEP 1: 목록 수집
-                posts = get_post_list(page, cafe_id)
+                posts = get_post_list(page, cafe_id, num_id)
 
                 # STEP 2: 신규 여부 확인
                 new_posts = [p for p in posts if is_new(p["post_id"])]
