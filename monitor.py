@@ -31,12 +31,16 @@ COOKIE_FILE = "naver_cookies.json"
 DB_FILE     = "seen_posts.db"
 
 # ─────────────────────────────────────────
-# 카페 설정
+# 카페 설정 (다중 카페)
 # ─────────────────────────────────────────
 
-CAFE_ID     = "likeusstock"
-CAFE_NAME   = "미국주식이 미래다"
-KEYWORDS    = ["한국투자증권", "한투", "뱅키스", "BanKIS"]   # BanKIS 영문 추가
+CAFES = [
+    {"id": "likeusstock", "name": "미국주식이 미래다"},
+    {"id": "vilab",       "name": "가치투자연구소"},
+    {"id": "yamizal",     "name": "미주미(야미잘)"},
+]
+
+KEYWORDS    = ["한국투자증권", "한투", "뱅키스", "BanKIS"]
 TIME_WINDOW = 3   # 탐지 범위 (시간)
 
 # ─────────────────────────────────────────
@@ -179,14 +183,14 @@ def parse_date(date_str):
         pass
     return now
 
-def get_post_list(page):
-    url = f"https://cafe.naver.com/{CAFE_ID}"
+def get_post_list(page, cafe_id):
+    url = f"https://cafe.naver.com/{cafe_id}"
     page.goto(url, wait_until="domcontentloaded")
     page.wait_for_timeout(2000)
 
     frame = None
     for f in page.frames:
-        if CAFE_ID in f.url and f.url != url:
+        if cafe_id in f.url and f.url != url:
             frame = f
             break
     if not frame:
@@ -222,7 +226,7 @@ def get_post_list(page):
             posts.append({
                 "post_id":   post_id,
                 "title":     title,
-                "url":       f"https://cafe.naver.com/{CAFE_ID}/{post_id}",
+                "url":       f"https://cafe.naver.com/{cafe_id}/{post_id}",
                 "post_time": post_time,
             })
         except Exception as e:
@@ -235,14 +239,14 @@ def get_post_list(page):
 # 게시글 본문 + 지표 수집
 # ─────────────────────────────────────────
 
-def get_post_detail(page, post_url):
+def get_post_detail(page, post_url, cafe_id):
     """본문 텍스트 + 조회수·댓글수·공감수 반환"""
     page.goto(post_url, wait_until="domcontentloaded")
     page.wait_for_timeout(2000)
 
     frame = None
     for f in page.frames:
-        if "ArticleRead" in f.url or CAFE_ID in f.url:
+        if "ArticleRead" in f.url or cafe_id in f.url:
             frame = f
             break
     if not frame:
@@ -379,7 +383,7 @@ def build_card(post, idx, total):
         <td style="padding:20px 28px;">
 
           <p style="margin:0 0 8px 0;font-size:10px;font-weight:bold;
-                    color:#c62828;letter-spacing:0.6px;">게시글 {idx} / {total}</p>
+                    color:#c62828;letter-spacing:0.6px;">게시글 {idx} / {total} &nbsp;·&nbsp; {post.get('cafe_name','')}</p>
 
           <table cellpadding="0" cellspacing="0" border="0" style="margin-bottom:10px;">
             <tr>
@@ -538,7 +542,7 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count):
 def main():
     init_db()
     log("=" * 48)
-    log(f"모니터링 시작 | {CAFE_NAME}")
+    log(f"모니터링 시작 | {len(CAFES)}개 카페")
     log(f"탐지 키워드: {', '.join(KEYWORDS)}")
     log(f"부정 강도 기준: {SCORE_THRESHOLD} 이상 알림 발송")
     log("=" * 48)
@@ -555,62 +559,71 @@ def main():
             context = browser.new_context(storage_state=COOKIE_FILE)
             page    = context.new_page()
 
-            # STEP 1: 목록 수집
-            posts = get_post_list(page)
+            total_crawled  = 0
+            total_keywords = 0
+            all_alerts     = []
 
-            # STEP 2: 신규 여부 확인
-            new_posts = [p for p in posts if is_new(p["post_id"])]
-            log(f"신규 게시글: {len(new_posts)}건")
+            # 카페별 순차 실행
+            for cafe in CAFES:
+                cafe_id   = cafe["id"]
+                cafe_name = cafe["name"]
+                log(f"\n── {cafe_name} ({cafe_id}) ──")
 
-            # STEP 3: 본문 수집 + 키워드 탐지 + AI 분석
-            alert_posts   = []
-            keyword_count = 0
-            for post in new_posts:
+                # STEP 1: 목록 수집
+                posts = get_post_list(page, cafe_id)
 
-                # 제목 키워드 먼저 확인 (대소문자 무시)
-                matched = next((kw for kw in KEYWORDS if kw.lower() in post["title"].lower()), None)
+                # STEP 2: 신규 여부 확인
+                new_posts = [p for p in posts if is_new(p["post_id"])]
+                log(f"신규 게시글: {len(new_posts)}건")
+                total_crawled += len(new_posts)
 
-                # 본문 + 지표 수집
-                body, views, comments, likes = get_post_detail(page, post["url"])
+                # STEP 3: 본문 수집 + 키워드 탐지 + AI 분석
+                for post in new_posts:
 
-                # 본문 키워드 확인 (제목 미매칭 시, 대소문자 무시)
-                if not matched:
-                    matched = next((kw for kw in KEYWORDS if kw.lower() in body.lower()), None)
+                    # 제목 키워드 먼저 확인 (대소문자 무시)
+                    matched = next((kw for kw in KEYWORDS if kw.lower() in post["title"].lower()), None)
 
-                # 키워드 미매칭 → DB 기록 후 스킵
-                if not matched:
+                    # 본문 + 지표 수집
+                    body, views, comments, likes = get_post_detail(page, post["url"], cafe_id)
+
+                    # 본문 키워드 확인 (제목 미매칭 시, 대소문자 무시)
+                    if not matched:
+                        matched = next((kw for kw in KEYWORDS if kw.lower() in body.lower()), None)
+
+                    # 키워드 미매칭 → DB 기록 후 스킵
+                    if not matched:
+                        mark_seen(post["post_id"])
+                        continue
+
+                    total_keywords += 1
+                    log(f"키워드 [{matched}] 탐지: {post['title'][:40]}...")
+                    result = analyze_sentiment(post["title"], body, matched)
+                    log(f"AI 결과 - 부정:{result['is_negative']} | 강도:{result['score']}/10")
+
+                    # AI 분석까지 완료 후 DB 기록
                     mark_seen(post["post_id"])
-                    continue
 
-                keyword_count += 1
-                log(f"키워드 [{matched}] 탐지: {post['title'][:40]}...")
-                result = analyze_sentiment(post["title"], body, matched)
-                log(f"AI 결과 - 부정:{result['is_negative']} | 강도:{result['score']}/10")
-
-                # AI 분석까지 완료 후 DB 기록
-                mark_seen(post["post_id"])
-
-                # score >= SCORE_THRESHOLD 인 경우만 알림 대상
-                if result["is_negative"] and result["score"] >= SCORE_THRESHOLD:
-                    post["matched_kw"] = html.escape(matched)
-                    post["score"]      = result["score"]
-                    post["summary"]    = html.escape(result["summary"])
-                    post["title"]      = html.escape(post["title"])
-                    post["url"]        = post["url"]
-                    post["views"]      = views
-                    post["comments"]   = comments
-                    post["likes"]      = likes
-                    alert_posts.append(post)
+                    # score >= SCORE_THRESHOLD 인 경우만 알림 대상
+                    if result["is_negative"] and result["score"] >= SCORE_THRESHOLD:
+                        post["cafe_name"]  = cafe_name
+                        post["matched_kw"] = html.escape(matched)
+                        post["score"]      = result["score"]
+                        post["summary"]    = html.escape(result["summary"])
+                        post["title"]      = html.escape(post["title"])
+                        post["views"]      = views
+                        post["comments"]   = comments
+                        post["likes"]      = likes
+                        all_alerts.append(post)
 
             browser.close()
 
             # STEP 4: 결과에 따라 이메일 분기
-            log(f"크롤링 {len(new_posts)}건 → 키워드 탐지 {keyword_count}건 → AI 필터링 {len(alert_posts)}건")
-            if alert_posts:
+            log(f"\n크롤링 {total_crawled}건 → 키워드 탐지 {total_keywords}건 → AI 필터링 {len(all_alerts)}건")
+            if all_alerts:
                 send_alert_batch(
-                    alert_posts,
-                    crawled_count=len(new_posts),
-                    keyword_count=keyword_count,
+                    all_alerts,
+                    crawled_count=total_crawled,
+                    keyword_count=total_keywords,
                 )
             else:
                 send_status_email("no_result")
@@ -618,7 +631,7 @@ def main():
     except Exception as e:
         err = traceback.format_exc()
         log(f"오류 발생: {e}")
-        send_status_email("error", detail=err)         # 발신자 전용 오류 알림
+        send_status_email("error", detail=err)
         raise
 
     log("모니터링 완료")
