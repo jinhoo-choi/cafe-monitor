@@ -240,25 +240,20 @@ def search_keyword(page, cafe_id, num_id, keyword):
             if not post_id or not post_id.isdigit():
                 continue
 
-            date_str  = date_el.inner_text().strip() if date_el else ""
+            import re
+            date_str = ""
+            # 모든 td 셀에서 날짜 형식 값 탐색
+            all_tds = row.query_selector_all("td")
+            for td in all_tds:
+                candidate = td.inner_text().strip()
+                if re.match(r"^(\d{1,2}:\d{2}|\d{4}\.\d{2}\.\d{2}|\d+분 전|\d+시간 전)$", candidate):
+                    date_str = candidate
+                    break
 
-            # 날짜 없으면 다른 셀렉터 시도
-            if not date_str:
-                for date_sel in ["td.td_date", ".date", "td.date", "span.date", "td.td_normal"]:
-                    el = row.query_selector(date_sel)
-                    if el:
-                        candidate = el.inner_text().strip()
-                        if candidate and candidate != title:
-                            date_str = candidate
-                            break
-
-            # 그래도 없으면 오늘로 처리
             if not date_str:
                 post_time = datetime.now(KST)
-                log(f"  날짜 없음: {title[:20]}")
             else:
                 post_time = parse_date(date_str)
-                log(f"  날짜: {date_str} → {post_time.strftime('%m/%d %H:%M')}")
 
             # cutoff 초과 스킵
             if post_time < cutoff:
@@ -375,8 +370,23 @@ score는 부정 강도 (0=전혀 부정 아님, 10=매우 부정적)"""
         )
         resp = response.json()
         if "error" in resp:
-            log(f"AI API 오류: {resp['error'].get('message','')}")
-            return {"is_negative": False, "summary": "분석 실패", "score": 0}
+            err_type = resp["error"].get("type", "")
+            if err_type == "overloaded_error":
+                log("AI Overloaded - 10초 후 재시도")
+                import time; time.sleep(10)
+                response = requests.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={"x-api-key": CLAUDE_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+                    json={"model": "claude-haiku-4-5-20251001", "max_tokens": 300, "messages": [{"role": "user", "content": prompt}]},
+                    timeout=30,
+                )
+                resp = response.json()
+                if "error" in resp:
+                    log(f"AI 재시도 실패: {resp['error'].get('message','')}")
+                    return {"is_negative": False, "summary": "분석 실패", "score": 0}
+            else:
+                log(f"AI API 오류: {resp['error'].get('message','')}")
+                return {"is_negative": False, "summary": "분석 실패", "score": 0}
         text = resp["content"][0]["text"].strip()
         if "```" in text:
             text = text.split("```")[1].replace("json", "").strip()
