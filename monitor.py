@@ -242,13 +242,25 @@ def search_keyword(page, cafe_id, num_id, keyword):
 
             date_str  = date_el.inner_text().strip() if date_el else ""
 
-            # 날짜 없으면 스킵
+            # 날짜 없으면 다른 셀렉터 시도
             if not date_str:
-                continue
+                for date_sel in ["td.td_date", ".date", "td.date", "span.date", "td.td_normal"]:
+                    el = row.query_selector(date_sel)
+                    if el:
+                        candidate = el.inner_text().strip()
+                        if candidate and candidate != title:
+                            date_str = candidate
+                            break
 
-            post_time = parse_date(date_str)
+            # 그래도 없으면 오늘로 처리
+            if not date_str:
+                post_time = datetime.now(KST)
+                log(f"  날짜 없음: {title[:20]}")
+            else:
+                post_time = parse_date(date_str)
+                log(f"  날짜: {date_str} → {post_time.strftime('%m/%d %H:%M')}")
 
-            # cutoff 초과 게시글 스킵 (검색결과가 최신순 보장 안 되므로 break 대신 continue)
+            # cutoff 초과 스킵
             if post_time < cutoff:
                 continue
 
