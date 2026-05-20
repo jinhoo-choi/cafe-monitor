@@ -207,14 +207,12 @@ def search_keyword(page, cafe_id, num_id, keyword):
     rows = [r for r in all_rows if "board-notice" not in (r.get_attribute("class") or "")]
     log(f"  검색 결과 {len(rows)}건")
 
-    # 첫 번째 행에서 날짜 셀렉터 확인용 디버그
+    # 첫 번째 행 td 내용 로그로 확인
     if rows:
         try:
-            import os
-            debug_path = f"debug_search_{cafe_id}.html"
-            if not os.path.exists(debug_path):
-                with open(debug_path, "w", encoding="utf-8") as f:
-                    f.write(page.content())
+            tds = rows[0].query_selector_all("td")
+            td_texts = [td.inner_text().strip()[:20] for td in tds]
+            log(f"  첫행 td 내용: {td_texts}")
         except Exception:
             pass
 
