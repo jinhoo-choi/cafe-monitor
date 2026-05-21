@@ -27,6 +27,7 @@ from playwright.sync_api import sync_playwright
 GMAIL_USER     = os.environ["GMAIL_USER"]
 GMAIL_APP_PW   = os.environ["GMAIL_APP_PW"]
 NOTIFY_EMAIL   = os.environ["NOTIFY_EMAIL"]
+RECIPIENTS     = [r.strip() for r in NOTIFY_EMAIL.split(",") if r.strip()]
 CLAUDE_API_KEY = os.environ["CLAUDE_API_KEY"]
 CLAUDE_MODEL   = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
 
@@ -130,13 +131,13 @@ def send_status_email(status, detail=""):
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"]    = GMAIL_USER
-    msg["To"]      = NOTIFY_EMAIL
+    msg["To"]      = ", ".join(RECIPIENTS)
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(GMAIL_USER, GMAIL_APP_PW)
-        s.sendmail(GMAIL_USER, NOTIFY_EMAIL, msg.as_string())
-    log(f"상태 이메일 발송 ({status}) → {NOTIFY_EMAIL}")
+        s.sendmail(GMAIL_USER, RECIPIENTS, msg.as_string())
+    log(f"상태 이메일 발송 ({status}) → {msg['To']}")
 
 # ─────────────────────────────────────────
 # DB (중복 방지)
@@ -582,7 +583,7 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count):
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(GMAIL_USER, GMAIL_APP_PW)
-        s.sendmail(GMAIL_USER, NOTIFY_EMAIL, msg.as_string())
+        s.sendmail(GMAIL_USER, RECIPIENTS, msg.as_string())
     log(f"담당자 이메일 발송 완료 - {total}건")
 
 # ─────────────────────────────────────────
