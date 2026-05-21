@@ -131,13 +131,13 @@ def send_status_email(status, detail=""):
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"]    = GMAIL_USER
-    msg["To"]      = ", ".join(RECIPIENTS)
+    msg["To"]      = GMAIL_USER
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(GMAIL_USER, GMAIL_APP_PW)
-        s.sendmail(GMAIL_USER, RECIPIENTS, msg.as_string())
-    log(f"상태 이메일 발송 ({status}) → {msg['To']}")
+        s.sendmail(GMAIL_USER, GMAIL_USER, msg.as_string())
+    log(f"상태 이메일 발송 ({status}) → {GMAIL_USER}")
 
 # ─────────────────────────────────────────
 # DB (중복 방지)
