@@ -74,15 +74,16 @@ def send_status_email(status, detail=""):
     발신자(GMAIL_USER)에게만 발송하는 운영 상태 알림
     status: "no_result" | "error"
     """
-    now_str = datetime.now(KST).strftime("%Y.%m.%d %H:%M")
+    now_kst = datetime.now(KST)
+    now_str = now_kst.strftime("%Y.%m.%d %H:%M")
 
     if status == "no_result":
-        subject = f"[모니터링] 네이버 카페 부정여론 탐지봇 | 탐지 없음 - {now_str}"
+        subject = f"[부정여론 탐지] {now_kst.strftime('%m')}월 {now_kst.strftime('%d')}일 {now_kst.strftime('%H')}시 {now_kst.strftime('%M')}분 기준 | 탐지 없음"
         body_txt = f"정상 실행되었으나 부정 탐지 게시글이 없습니다.\n\n실행 시각: {now_str} KST"
         color    = "#2e7d32"
         title    = "탐지 없음 - 정상 실행"
     else:
-        subject  = f"[모니터링 오류] 네이버 카페 부정여론 탐지봇 | {now_str}"
+        subject  = f"[부정여론 탐지] {now_kst.strftime('%m')}월 {now_kst.strftime('%d')}일 {now_kst.strftime('%H')}시 {now_kst.strftime('%M')}분 기준 | 오류"
         body_txt = f"오류가 발생했습니다.\n\n{detail}"
         color    = "#b71c1c"
         title    = "실행 오류 발생"
@@ -483,7 +484,7 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count):
     now_str  = datetime.now(KST).strftime("%Y.%m.%d %H:%M")
 
     now_kst  = datetime.now(KST)
-    subject  = f"(eBiz본부) 커뮤니티 부정여론 탐지봇 {now_kst.strftime('%m')}월 {now_kst.strftime('%d')}일 {now_kst.strftime('%H')}시 기준"
+    subject  = f"[부정여론 탐지] {now_kst.strftime('%m')}월 {now_kst.strftime('%d')}일 {now_kst.strftime('%H')}시 {now_kst.strftime('%M')}분 기준"
     banner_badge = f"AI 부정여론 탐지 · {total}건"
     banner_title = f"네이버 카페 부정 언급 {total}건 탐지"
 
