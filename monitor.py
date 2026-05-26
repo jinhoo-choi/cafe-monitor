@@ -268,6 +268,7 @@ def search_keyword(page, cafe_id, num_id, keyword):
                 "title":     title,
                 "url":       f"https://cafe.naver.com/f-e/cafes/{num_id}/articles/{post_id}",
                 "post_time": post_time,
+                "date_str":  date_str,
                 "keyword":   keyword,
             })
         except Exception as e:
@@ -413,8 +414,13 @@ def build_card(post, idx, total):
     keyword  = html.escape(post["matched_kw"])
     score    = post["score"]
     summary  = html.escape(post["summary"])
-    post_dt  = post.get("post_time")
-    date_str = post_dt.strftime("%Y.%m.%d %H:%M") if post_dt else "-"
+    post_dt   = post.get("post_time")
+    raw_date  = post.get("date_str", "")
+    # 원본 날짜 문자열 우선 표시, 없으면 파싱된 시각 사용
+    if raw_date:
+        date_str = raw_date
+    else:
+        date_str = post_dt.strftime("%Y.%m.%d %H:%M") if post_dt else "-"
 
     return f"""
     <!--[if true]><table width="100%" cellpadding="0" cellspacing="0"><tr><td><![endif]-->
