@@ -1,6 +1,6 @@
 """
 네이버 카페 부정여론 모니터링 (다중 카페)
-- 6시간 내 게시글 중 키워드(한국투자증권/한투/뱅키스/BanKIS) 탐지
+- 24시간 내 게시글 중 키워드(한국투자증권/한투/뱅키스/BanKIS) 탐지
 - Claude AI로 부정 뉘앙스 분석 및 요약
 - 부정 강도 1 이상 게시글 담당자 이메일 발송
 - 탐지 없음 / 오류 시 발신자 전용 상태 이메일 발송
@@ -58,6 +58,15 @@ TIME_WINDOW = 24   # 탐지 범위 (시간) - 24시간 기준, 일 1회 발송
 # ※ 현재는 키워드 탐지 게시글 전체 발송 (score는 이메일 카드에 참고 표시)
 SCORE_THRESHOLD = 1   # 부정 강도 이 값 이상인 경우만 알림 발송
 MAX_ALERTS     = 30   # 이메일 발송 최대 건수 제한
+NEGATIVE_HINTS = [   # AI 호출 전 룰필터 - 하나라도 있으면 Claude 분석 진행
+    # 감성 표현
+    "불만", "먹통", "최악", "탈출", "화남", "짜증", "안됨", "안돼",
+    "피해", "피해자", "사기", "민원", "환불", "차단", "거부",
+    # 증권사 서비스 관련
+    "오류", "에러", "버그", "장애", "지연", "먹힘",
+    "체결", "매도", "매수", "출금", "접속", "로그인",
+    "주문", "HTS", "MTS", "고객센터", "실패", "취소",
+]
 
 KST = timezone(timedelta(hours=9))
 
@@ -209,7 +218,7 @@ def parse_date(date_str):
     return now
 
 def search_keyword(page, cafe_id, num_id, keyword):
-    """카페 인카페 검색으로 키워드 포함 게시글 수집 (6시간 이내)"""
+    """카페 인카페 검색으로 키워드 포함 게시글 수집 (24시간 이내)"""
     # 인카페 검색 URL (실제 확인된 구조)
     encoded = urllib.parse.quote(keyword)
     url = f"https://cafe.naver.com/f-e/cafes/{num_id}/menus/0?viewType=L&ta=ARTICLE_COMMENT&page=1&q={encoded}"
@@ -504,8 +513,6 @@ def build_card(post, idx, total):
 def send_alert_batch(alert_posts, crawled_count, keyword_count):
     """탐지 게시글 담당자 이메일 발송 (아웃룩/Gmail/모바일 호환)"""
     total    = len(alert_posts)
-    keywords = list({p["matched_kw"] for p in alert_posts})
-    kw_str   = "·".join(keywords)
     now_str  = datetime.now(KST).strftime("%Y.%m.%d %H:%M")
 
     now_kst  = datetime.now(KST)
@@ -681,24 +688,12 @@ def main():
                     body = get_post_detail(page, post["url"], cafe_id)
 
                     # AI 호출 전 룰필터 (부정 힌트 없으면 Claude 미호출 → 비용 절감)
-                    NEGATIVE_HINTS = [
-                        "불만", "먹통", "오류", "안됨", "최악", "탈출", "화남",
-                        "손실", "짜증", "환불", "고객센터", "민원", "장애", "에러",
-                        "버그", "느림", "지연", "먹힘", "안돼", "이상해", "문제",
-                        "취소", "실패", "거부", "차단", "사기", "피해", "피해자",
-                    ]
                     combined_text = (post["title"] + " " + body).lower()
                     has_hint = any(hint in combined_text for hint in NEGATIVE_HINTS)
 
                     if not has_hint:
                         log(f"  룰필터 통과 - AI 분석 생략 (부정 힌트 없음)")
-                        result = {"is_negative": False, "summary": "부정 힌트 없음 - AI 분석 생략", "score": 0}
-                        mark_seen(f"{cafe_id}:{post['post_id']}")
-                        post["cafe_name"]  = cafe_name
-                        post["matched_kw"] = matched
-                        post["score"]      = 0
-                        post["summary"]    = "부정 힌트 없음 - AI 분석 생략"
-                        continue
+                        continue  # seen 처리 안 함 → 다음 실행에서 재검토 가능
                     
                     result = analyze_sentiment(post["title"], body, matched)
                     # AI 분석 성공 시만 seen 처리 (실패 시 다음 실행에서 재시도)
