@@ -2,7 +2,7 @@
 네이버 카페 부정여론 모니터링 (다중 카페)
 - 6시간 내 게시글 중 키워드(한국투자증권/한투/뱅키스/BanKIS) 탐지
 - Claude AI로 부정 뉘앙스 분석 및 요약
-- 키워드 탐지 게시글 전체 담당자 이메일 발송 (부정 강도 참고용)
+- 부정 강도 1 이상 게시글 담당자 이메일 발송
 - 탐지 없음 / 오류 시 발신자 전용 상태 이메일 발송
 """
 
@@ -40,11 +40,14 @@ CAFES = [
     {"id": "likeusstock", "num_id": "28497937", "name": "미국주식이 미래다"},
     {"id": "vilab",       "num_id": "11525920", "name": "가치투자연구소"},
     {"id": "yamizal",     "num_id": "30676048", "name": "미국 주식에 미치다"},
+    {"id": "geobuk2",     "num_id": "26251287", "name": "거북이 투자법"},
+    {"id": "ustock",      "num_id": "15112066", "name": "평생주식카페"},
+    {"id": "onepieceholicplus", "num_id": "22290117", "name": "월급쟁이 재테크 연구카페"},
 ]
 
 KEYWORDS    = ["한국투자증권", "한투", "뱅키스", "BanKIS"]
 DB_FILE      = "seen_posts.json"
-TIME_WINDOW = 6    # 탐지 범위 (시간)
+TIME_WINDOW = 12   # 탐지 범위 (시간) - 날짜 파싱 오차 대비 넓게 설정, DB 중복방지로 재탐지 차단
 
 # ─────────────────────────────────────────
 # 부정 강도 판단 기준 (score 0~10)
@@ -167,6 +170,16 @@ def mark_seen(unique_id):
     data = _load_db()
     data[unique_id] = datetime.now().isoformat()
     _save_db(data)
+
+def cleanup_db(days=30):
+    """30일 지난 항목 자동 삭제"""
+    data = _load_db()
+    cutoff = datetime.now() - timedelta(days=days)
+    cleaned = {k: v for k, v in data.items()
+               if datetime.fromisoformat(v) > cutoff}
+    if len(cleaned) < len(data):
+        _save_db(cleaned)
+        log(f"DB 정리: {len(data) - len(cleaned)}건 삭제 ({len(cleaned)}건 유지)")
 
 def parse_date(date_str):
     now = datetime.now(KST)
@@ -342,7 +355,7 @@ def get_post_detail(page, post_url, cafe_id):
 
 def analyze_sentiment(title, body, keyword):
     prompt = f"""다음은 네이버 카페 게시글입니다.
-이 게시글에서 '{keyword}'에 대한 내용이 부정적인지 분석하고, 3줄 이내로 요약해주세요.
+이 게시글이 '한국투자증권(한투/뱅키스/BanKIS)' 자체에 대한 불만·비판·리스크인지 판단하고, 3줄 이내로 요약해주세요.
 
 [제목]
 {title}
@@ -350,9 +363,15 @@ def analyze_sentiment(title, body, keyword):
 [본문]
 {body[:1500] if body else "(본문 없음 - 제목만으로 판단)"}
 
-분석 기준:
-- 불만, 비판, 욕설, 피해 사례, 불신, 부정적 경험 → 부정 (is_negative: true)
-- 단순 언급, 중립 정보, 긍정적 내용 → 부정 아님 (is_negative: false)
+▶ 부정(is_negative: true)으로 판단할 것:
+- 한국투자증권의 서비스·앱·장애·응대·수수료·전산·출금·주문·HTS/MTS·신뢰와 직접 관련된 불만·비판·피해
+- 욕설·비방·사기 주장·집단 민원 촉구
+
+▶ 부정 아님(is_negative: false)으로 판단할 것:
+- 단순 질문·이벤트 문의·정보 공유·증권사 비교
+- 시장 전반 불만 또는 타 증권사 불만
+- 한국투자증권 단순 언급 (중립·긍정 문맥)
+- 일반 투자 손실 (한국투자증권 귀책 아닌 경우)
 
 반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트 없이 JSON만:
 {{"is_negative": true or false, "summary": "게시글 내용을 3줄 이내 요약 (객관적 서술체)", "score": 0~10}}
@@ -496,7 +515,7 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count):
 
     cards_html = "".join(build_card(p, i+1, total) for i, p in enumerate(alert_posts))
 
-    html = f"""<!DOCTYPE html>
+    html_body = f"""<!DOCTYPE html>
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
@@ -586,7 +605,7 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count):
     msg["Subject"] = subject
     msg["From"]    = GMAIL_USER
     msg["To"]      = NOTIFY_EMAIL
-    msg.attach(MIMEText(html, "html", "utf-8"))
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(GMAIL_USER, GMAIL_APP_PW)
@@ -598,6 +617,8 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count):
 # ─────────────────────────────────────────
 
 def main():
+    init_db()
+    cleanup_db()
     log("=" * 48)
     log(f"모니터링 시작 | {len(CAFES)}개 카페")
     log(f"탐지 키워드: {', '.join(KEYWORDS)}")
@@ -656,8 +677,29 @@ def main():
                     total_keywords += 1
                     log(f"키워드 [{matched}] 탐지: {post['title'][:40]}...")
 
-                    # 본문 + 지표 수집
+                    # 본문 수집
                     body = get_post_detail(page, post["url"], cafe_id)
+
+                    # AI 호출 전 룰필터 (부정 힌트 없으면 Claude 미호출 → 비용 절감)
+                    NEGATIVE_HINTS = [
+                        "불만", "먹통", "오류", "안됨", "최악", "탈출", "화남",
+                        "손실", "짜증", "환불", "고객센터", "민원", "장애", "에러",
+                        "버그", "느림", "지연", "먹힘", "안돼", "이상해", "문제",
+                        "취소", "실패", "거부", "차단", "사기", "피해", "피해자",
+                    ]
+                    combined_text = (post["title"] + " " + body).lower()
+                    has_hint = any(hint in combined_text for hint in NEGATIVE_HINTS)
+
+                    if not has_hint:
+                        log(f"  룰필터 통과 - AI 분석 생략 (부정 힌트 없음)")
+                        result = {"is_negative": False, "summary": "부정 힌트 없음 - AI 분석 생략", "score": 0}
+                        mark_seen(f"{cafe_id}:{post['post_id']}")
+                        post["cafe_name"]  = cafe_name
+                        post["matched_kw"] = matched
+                        post["score"]      = 0
+                        post["summary"]    = "부정 힌트 없음 - AI 분석 생략"
+                        continue
+                    
                     result = analyze_sentiment(post["title"], body, matched)
                     # AI 분석 성공 시만 seen 처리 (실패 시 다음 실행에서 재시도)
                     if result["summary"] != "분석 실패":
