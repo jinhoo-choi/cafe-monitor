@@ -143,8 +143,9 @@ def send_status_email(status, detail=""):
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"]    = GMAIL_USER
+    msg["From"]    = f"eBiz 부정여론봇 <{GMAIL_USER}>"
     msg["To"]      = GMAIL_USER
+    msg["Date"]    = now_kst.strftime("%a, %d %b %Y %H:%M:%S +0900")
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
@@ -383,8 +384,9 @@ def analyze_sentiment(title, body, keyword):
 - 일반 투자 손실 (한국투자증권 귀책 아닌 경우)
 
 반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트 없이 JSON만:
-{{"is_negative": true or false, "summary": "게시글 내용을 3줄 이내 요약 (객관적 서술체)", "score": 0~10}}
-score는 부정 강도 (0=전혀 부정 아님, 10=매우 부정적)"""
+{{"is_negative": true or false, "summary": "게시글 내용을 3줄 이내 요약 (객관적 서술체)", "score": 0~10, "reply": "추천 대응 답변"}}
+score는 부정 강도 (0=전혀 부정 아님, 10=매우 부정적)
+reply는 카페에서 친한 투자 선배가 댓글 달아주는 느낌으로. 2~3문장. 존댓말이지만 편하게. 어려운 말 쓰지 말고 핵심만. 불만이면 간단히 공감하고 해결방향 한 줄, 질문이면 아는 범위에서 짧게 답변. 대응이 불필요한 경우(한국투자증권 귀책 아닌 개인 투자 손실, 단순 중립 언급 등)는 그 이유를 짧게 작성 (예: "개인 투자 손실로 한국투자증권 귀책 없음", "단순 정보 공유로 대응 불필요")."""
 
     try:
         response = requests.post(
@@ -396,7 +398,7 @@ score는 부정 강도 (0=전혀 부정 아님, 10=매우 부정적)"""
             },
             json={
                 "model": CLAUDE_MODEL,
-                "max_tokens": 300,
+                "max_tokens": 600,
                 "messages": [{"role": "user", "content": prompt}],
             },
             timeout=30,
@@ -430,7 +432,7 @@ score는 부정 강도 (0=전혀 부정 아님, 10=매우 부정적)"""
         return json.loads(match.group())
     except Exception as e:
         log(f"AI 분석 오류: {e}")
-        return {"is_negative": False, "summary": "분석 실패", "score": 0}
+        return {"is_negative": False, "summary": "분석 실패", "score": 0, "reply": ""}
 
 # ─────────────────────────────────────────
 # 이메일 발송 (담당자용)
@@ -444,11 +446,17 @@ def build_card(post, idx, total):
     summary  = html.escape(post["summary"])
     post_dt   = post.get("post_time")
     raw_date  = post.get("date_str", "")
-    # 원본 날짜 문자열 우선 표시, 없으면 파싱된 시각 사용
-    if raw_date:
+    # 원본 날짜 문자열 우선 표시
+    if raw_date and re.match(r"^\d{1,2}:\d{2}$", raw_date):
+        # 시간만 있는 경우 post_time 날짜 기준으로 표시
+        if post_dt:
+            date_str = post_dt.astimezone(KST).strftime("%Y.%m.%d ") + raw_date
+        else:
+            date_str = datetime.now(KST).strftime("%Y.%m.%d ") + raw_date
+    elif raw_date:
         date_str = raw_date
     else:
-        date_str = post_dt.strftime("%Y.%m.%d %H:%M") if post_dt else "-"
+        date_str = post_dt.astimezone(KST).strftime("%Y.%m.%d %H:%M") if post_dt else "-"
 
     return f"""
     <!--[if true]><table width="100%" cellpadding="0" cellspacing="0"><tr><td><![endif]-->
@@ -503,6 +511,15 @@ def build_card(post, idx, total):
               </td>
             </tr>
           </table>
+          <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;background:#f0f4ff;">
+            <tr>
+              <td width="3" style="background:#3d5afe;font-size:0;">&nbsp;</td>
+              <td style="padding:10px 14px;">
+                <p style="margin:0 0 4px 0;font-size:10px;font-weight:bold;color:#3d5afe;letter-spacing:0.6px;">💬 AI 추천 대응</p>
+                <p style="margin:0;font-size:13px;color:#444;line-height:1.8;">{reply}</p>
+              </td>
+            </tr>
+          </table>
 
         </td>
       </tr>
@@ -520,7 +537,8 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count):
     banner_badge = f"AI 부정여론 탐지 · {total}건"
     banner_title = f"네이버 카페 부정 언급 {total}건 탐지"
 
-    cards_html = "".join(build_card(p, i+1, total) for i, p in enumerate(alert_posts))
+    sorted_posts = sorted(alert_posts, key=lambda x: x.get("score", 0), reverse=True)
+    cards_html = "".join(build_card(p, i+1, total) for i, p in enumerate(sorted_posts))
 
     html_body = f"""<!DOCTYPE html>
 <html lang="ko">
@@ -610,8 +628,9 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count):
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"]    = GMAIL_USER
-    msg["To"]      = NOTIFY_EMAIL
+    msg["From"]    = f"eBiz 부정여론봇 <{GMAIL_USER}>"
+    msg["To"]      = ", ".join(RECIPIENTS)
+    msg["Date"]    = now_kst.strftime("%a, %d %b %Y %H:%M:%S +0900")
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
@@ -706,6 +725,7 @@ def main():
                     post["matched_kw"] = matched
                     post["score"]      = result["score"]
                     post["summary"]    = result["summary"]
+                    post["reply"]      = result.get("reply", "")
                     if result["score"] >= SCORE_THRESHOLD:
                         all_alerts.append(post)
 
