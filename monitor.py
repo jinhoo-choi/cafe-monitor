@@ -444,6 +444,7 @@ def build_card(post, idx, total):
     keyword  = html.escape(post["matched_kw"])
     score    = post["score"]
     summary  = html.escape(post["summary"])
+    reply    = html.escape(post.get("reply", ""))
     post_dt   = post.get("post_time")
     raw_date  = post.get("date_str", "")
     # 원본 날짜 문자열 우선 표시
