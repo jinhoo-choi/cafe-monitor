@@ -55,7 +55,7 @@ TIME_WINDOW = 24   # 탐지 범위 (시간) - 24시간 기준, 일 1회 발송
 # 0~3 : 단순 언급 / 중립 / 경미한 불만
 # 4~6 : 명확한 불만·비판·피해 호소
 # 7~10: 강한 비판·확산 가능성 높음
-# ※ 현재는 키워드 탐지 게시글 전체 발송 (score는 이메일 카드에 참고 표시)
+# ※ SCORE_THRESHOLD 이상인 경우만 담당자 알림 발송
 SCORE_THRESHOLD = 1   # 부정 강도 이 값 이상인 경우만 알림 발송
 MAX_ALERTS     = 30   # 이메일 발송 최대 건수 제한
 NEGATIVE_HINTS = [   # AI 호출 전 룰필터 - 하나라도 있으면 Claude 분석 진행
@@ -413,17 +413,17 @@ reply는 카페에서 친한 투자 선배가 댓글 달아주는 느낌으로. 
                 response = requests.post(
                     "https://api.anthropic.com/v1/messages",
                     headers={"x-api-key": CLAUDE_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                    json={"model": CLAUDE_MODEL, "max_tokens": 300, "messages": [{"role": "user", "content": prompt}]},
+                    json={"model": CLAUDE_MODEL, "max_tokens": 600, "messages": [{"role": "user", "content": prompt}]},
                     timeout=30,
                 )
                 response.raise_for_status()
                 resp = response.json()
                 if "error" in resp:
                     log(f"AI 재시도 실패: {resp['error'].get('message','')}")
-                    return {"is_negative": False, "summary": "분석 실패", "score": 0}
+                    return {"is_negative": False, "summary": "분석 실패", "score": 0, "reply": ""}
             else:
                 log(f"AI API 오류: {resp['error'].get('message','')}")
-                return {"is_negative": False, "summary": "분석 실패", "score": 0}
+                return {"is_negative": False, "summary": "분석 실패", "score": 0, "reply": ""}
         text = resp["content"][0]["text"].strip()
         # JSON 블록 추출 (설명 텍스트 섞여도 안전하게)
         match = re.search(r'\{.*\}', text, re.S)
@@ -735,6 +735,7 @@ def main():
             # STEP 4: 결과에 따라 이메일 분기
             log(f"\n크롤링 {total_crawled}건 → 키워드 탐지 {total_keywords}건 → AI 필터링 {len(all_alerts)}건")
             if all_alerts:
+                all_alerts = sorted(all_alerts, key=lambda x: x.get("score", 0), reverse=True)
                 if len(all_alerts) > MAX_ALERTS:
                     log(f"알림 건수 초과 — {len(all_alerts)}건 중 {MAX_ALERTS}건만 발송")
                     all_alerts = all_alerts[:MAX_ALERTS]
