@@ -448,16 +448,17 @@ def build_card(post, idx, total):
     post_dt   = post.get("post_time")
     raw_date  = post.get("date_str", "")
     # 원본 날짜 문자열 우선 표시
+    # raw_date 원본 문자열 그대로 표시 (parse_date가 이미 KST 기준이므로 변환 불필요)
     if raw_date and re.match(r"^\d{1,2}:\d{2}$", raw_date):
-        # 시간만 있는 경우 post_time 날짜 기준으로 표시
+        # 시간만 있는 경우 → 날짜는 post_time에서 직접 strftime (변환 없이)
         if post_dt:
-            date_str = post_dt.astimezone(KST).strftime("%Y.%m.%d ") + raw_date
+            date_str = post_dt.strftime("%Y.%m.%d ") + raw_date
         else:
             date_str = datetime.now(KST).strftime("%Y.%m.%d ") + raw_date
     elif raw_date:
         date_str = raw_date
     else:
-        date_str = post_dt.astimezone(KST).strftime("%Y.%m.%d %H:%M") if post_dt else "-"
+        date_str = post_dt.strftime("%Y.%m.%d %H:%M") if post_dt else "-"
 
     return f"""
     <!--[if true]><table width="100%" cellpadding="0" cellspacing="0"><tr><td><![endif]-->
