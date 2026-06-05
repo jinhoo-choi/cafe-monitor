@@ -193,6 +193,8 @@ def cleanup_db(days=30):
         log(f"DB 정리: {len(data) - len(cleaned)}건 삭제 ({len(cleaned)}건 유지)")
 
 def parse_date(date_str):
+    """날짜 문자열을 KST aware datetime으로 변환 (GitHub Actions UTC 서버 환경 대응)"""
+    # datetime.now(KST): timezone-aware로 명시적 KST 지정 → 서버 로컬 시간 무관
     now = datetime.now(KST)
     try:
         if date_str == "방금":
@@ -205,7 +207,8 @@ def parse_date(date_str):
             return now - timedelta(hours=int(date_str.replace("시간 전", "").strip()))
         if ":" in date_str:
             t = datetime.strptime(date_str, "%H:%M")
-            parsed = now.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
+            # now는 KST aware이므로 날짜 기준도 KST → UTC 서버 날짜 오염 방지
+            parsed = now.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0, tzinfo=KST)
             # 미래 시각이면 전날로 처리
             if parsed > now:
                 parsed -= timedelta(days=1)
@@ -213,7 +216,7 @@ def parse_date(date_str):
         if "." in date_str:
             clean = date_str.strip().rstrip(".")
             d = datetime.strptime(clean, "%Y.%m.%d")
-            # 날짜만 있는 경우 00:00으로 처리 (당일 자정 기준 → 3시간 이내 엄격 필터)
+            # tzinfo=KST 명시적 지정 → naive datetime의 astimezone 9시간 오류 방지
             return d.replace(hour=0, minute=0, second=0, tzinfo=KST)
     except Exception:
         pass
