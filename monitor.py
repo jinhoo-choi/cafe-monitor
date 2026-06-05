@@ -12,6 +12,7 @@ import html
 import smtplib
 import traceback
 import re
+import random
 import time
 import urllib.parse
 import requests
@@ -224,7 +225,7 @@ def search_keyword(page, cafe_id, num_id, keyword):
     encoded = urllib.parse.quote(keyword)
     url = f"https://cafe.naver.com/f-e/cafes/{num_id}/menus/0?viewType=L&ta=ARTICLE_COMMENT&page=1&q={encoded}"
     page.goto(url, wait_until="networkidle")
-    page.wait_for_timeout(4000)
+    page.wait_for_timeout(random.randint(3000, 6000))  # 랜덤 딜레이 (봇 탐지 방어)
 
     log(f"  검색: [{keyword}] → {url[:80]}")
 
@@ -332,7 +333,7 @@ def get_post_detail(page, post_url, cafe_id):
     inner_url = post_url.replace("/f-e/cafes/", "/ca-fe/cafes/") + "?fromNext=true"
     try:
         page.goto(inner_url, wait_until="domcontentloaded", timeout=15000)
-        page.wait_for_timeout(2000)
+        page.wait_for_timeout(random.randint(1500, 3000))  # 랜덤 딜레이 (봇 탐지 방어)
     except Exception:
         # 타임아웃 시 현재 상태로 진행
         page.wait_for_timeout(1000)
@@ -712,7 +713,8 @@ def main():
 
                     if not has_hint:
                         log(f"  룰필터 통과 - AI 분석 생략 (부정 힌트 없음)")
-                        continue  # seen 처리 안 함 → 다음 실행에서 재검토 가능
+                        mark_seen(f"{cafe_id}:{post['post_id']}")
+                        continue
                     
                     result = analyze_sentiment(post["title"], body, matched)
                     # AI 분석 성공 시만 seen 처리 (실패 시 다음 실행에서 재시도)
