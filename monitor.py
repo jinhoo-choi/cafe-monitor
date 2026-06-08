@@ -290,6 +290,7 @@ def search_keyword(page, cafe_id, num_id, keyword):
                 post_time = datetime.now(KST)
             else:
                 post_time = parse_date(date_str)
+                log(f"  날짜 수집: raw={date_str!r} → parsed={post_time.strftime('%m.%d %H:%M %Z')}")
 
             # cutoff 초과 스킵
             if post_time < cutoff:
