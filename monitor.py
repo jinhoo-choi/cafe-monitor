@@ -95,6 +95,11 @@ def send_status_email(status, detail=""):
         body_txt = f"정상 실행되었으나 부정 탐지 게시글이 없습니다.\n\n실행 시각: {now_str} KST"
         color    = "#2e7d32"
         title    = "탐지 없음 - 정상 실행"
+    elif status == "warning":
+        subject  = f"[부정여론 탐지] ⚠️ 쿠키 만료 임박 | {now_kst.strftime('%m')}월 {now_kst.strftime('%d')}일"
+        body_txt = f"쿠키 만료가 임박했습니다. 조치가 필요합니다.\n\n{detail}"
+        color    = "#e65100"
+        title    = "⚠️ 쿠키 만료 임박 - 재등록 필요"
     else:
         subject  = f"[부정여론 탐지] {now_kst.strftime('%m')}월 {now_kst.strftime('%d')}일 {now_kst.strftime('%H')}시 {now_kst.strftime('%M')}분 기준 | 오류"
         body_txt = f"오류가 발생했습니다.\n\n{detail}"
@@ -449,6 +454,28 @@ def build_card(post, idx, total):
     score    = post["score"]
     summary  = html.escape(post["summary"])
     reply    = html.escape(post.get("reply", ""))
+
+    # 유사 이슈 관련글 HTML
+    related_posts = post.get("related_posts", [])
+    common_kws    = post.get("common_keywords", [])
+    if related_posts:
+        kw_str = " · ".join(common_kws) if common_kws else ""
+        related_items = "".join(
+            f'<tr><td style="padding:3px 0;font-size:12px;color:#555;">'
+            f'· <a href="{html.escape(p["url"],quote=True)}" style="color:#555;text-decoration:none;">'
+            f'{html.escape(p["title"][:40])}...</a>'
+            f' <span style="color:#bbb;font-size:11px;">{p.get("cafe_name","")}</span></td></tr>'
+            for p in related_posts
+        )
+        related_html = f'''<table width="100%" cellpadding="0" cellspacing="0" border="0"
+          style="margin-top:8px;background:#fff8e1;border-left:3px solid #ffc107;">
+          <tr><td style="padding:8px 12px;">
+            <p style="margin:0 0 5px 0;font-size:10px;font-weight:bold;color:#f57f17;">
+              📎 유사 이슈 {len(related_posts)}건 추가 탐지 {f"({kw_str})" if kw_str else ""}</p>
+            <table cellpadding="0" cellspacing="0">{related_items}</table>
+          </td></tr></table>'''
+    else:
+        related_html = ""
     post_dt   = post.get("post_time")
     raw_date  = post.get("date_str", "")
     # 원본 날짜 문자열 우선 표시
@@ -524,11 +551,68 @@ def build_card(post, idx, total):
               </td>
             </tr>
           </table>
+          {related_html}
 
         </td>
       </tr>
     </table>
     <!--[if true]></td></tr></table><![endif]-->"""
+
+
+def group_similar_alerts(alert_posts):
+    """유사한 게시글을 이슈 단위로 묶음 처리
+    같은 날 제목 키워드가 유사하면(공통 명사 2개 이상) 하나의 이슈로 묶음
+    """
+    if len(alert_posts) <= 1:
+        return alert_posts, []
+
+    import difflib
+
+    def get_keywords(title):
+        # 제목에서 의미있는 단어 추출 (2글자 이상)
+        words = re.findall(r"[가-힣a-zA-Z]{2,}", title)
+        stop = {"하는", "있는", "없는", "이거", "저도", "혹시", "어떻게", "어디서", "왜이럼", "인가요", "인지요", "같은"}
+        return set(w for w in words if w not in stop)
+
+    groups = []
+    used = set()
+
+    for i, post in enumerate(alert_posts):
+        if i in used:
+            continue
+        group = [post]
+        kw_i = get_keywords(post["title"])
+        for j, other in enumerate(alert_posts):
+            if j <= i or j in used:
+                continue
+            kw_j = get_keywords(other["title"])
+            common = kw_i & kw_j
+            if len(common) >= 2:
+                group.append(other)
+                used.add(j)
+        used.add(i)
+        groups.append(group)
+
+    # 단일 게시글은 그대로, 묶인 그룹은 대표 게시글 + 관련글 표시
+    flat_posts = []
+    grouped_info = []  # (대표 idx, 관련글 수, 공통 키워드)
+
+    for group in groups:
+        if len(group) == 1:
+            flat_posts.append(group[0])
+        else:
+            # 부정강도 가장 높은 걸 대표로
+            rep = max(group, key=lambda x: x.get("score", 0))
+            related = [p for p in group if p is not rep]
+            kw_i = get_keywords(rep["title"])
+            common_kws = kw_i
+            for p in related:
+                common_kws &= get_keywords(p["title"])
+            rep["related_posts"] = related
+            rep["common_keywords"] = list(common_kws)[:3]
+            flat_posts.append(rep)
+
+    return flat_posts, []
 
 
 def send_alert_batch(alert_posts, crawled_count, keyword_count):
@@ -664,6 +748,26 @@ def main():
                 raise RuntimeError("naver_cookies.json 없음 - NAVER_COOKIES_JSON Secret 확인 필요")
 
             log("쿠키 파일로 접속")
+
+            # 쿠키 만료 사전 감지
+            try:
+                with open(COOKIE_FILE, "r", encoding="utf-8") as f:
+                    cookie_data = json.load(f)
+                cookies = cookie_data.get("cookies", [])
+                now_ts = datetime.now(KST).timestamp()
+                expiring_soon = []
+                for c in cookies:
+                    exp = c.get("expires", -1)
+                    if 0 < exp < now_ts + (3 * 24 * 3600):  # 3일 이내 만료
+                        expiring_soon.append(c.get("name", "unknown"))
+                if expiring_soon:
+                    send_status_email("warning",
+                        detail=f"쿠키 만료 임박 (3일 이내): {', '.join(expiring_soon)}\n"
+                               f"NAVER_COOKIES_JSON Secret 재등록을 준비해주세요.")
+                    log(f"⚠️ 쿠키 만료 임박: {expiring_soon}")
+            except Exception as e:
+                log(f"쿠키 만료 확인 중 오류: {e}")
+
             context = browser.new_context(storage_state=COOKIE_FILE)
             page    = context.new_page()
 
@@ -743,6 +847,11 @@ def main():
                 if len(all_alerts) > MAX_ALERTS:
                     log(f"알림 건수 초과 — {len(all_alerts)}건 중 {MAX_ALERTS}건만 발송")
                     all_alerts = all_alerts[:MAX_ALERTS]
+                # 유사 이슈 묶음 처리
+                all_alerts, _ = group_similar_alerts(all_alerts)
+                grouped_cnt = sum(1 for p in all_alerts if p.get("related_posts"))
+                if grouped_cnt:
+                    log(f"유사 이슈 묶음: {grouped_cnt}건 그룹화")
                 send_alert_batch(
                     all_alerts,
                     crawled_count=total_crawled,
