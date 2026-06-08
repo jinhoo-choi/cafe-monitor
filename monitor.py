@@ -149,7 +149,7 @@ def send_status_email(status, detail=""):
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"]    = f"eBiz 부정여론봇 <{GMAIL_USER}>"
+    msg["From"]    = f"⚠️ eBiz 부정여론봇 <{GMAIL_USER}>"
     msg["To"]      = GMAIL_USER
     msg["Date"]    = now_kst.strftime("%a, %d %b %Y %H:%M:%S +0900")
     msg.attach(MIMEText(html_body, "html", "utf-8"))
@@ -735,7 +735,7 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count):
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"]    = f"eBiz 부정여론봇 <{GMAIL_USER}>"
+    msg["From"]    = f"⚠️ eBiz 부정여론봇 <{GMAIL_USER}>"
     msg["To"]      = ", ".join(RECIPIENTS)
     msg["Date"]    = now_kst.strftime("%a, %d %b %Y %H:%M:%S +0900")
     msg.attach(MIMEText(html_body, "html", "utf-8"))
