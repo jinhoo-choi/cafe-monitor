@@ -91,7 +91,7 @@ def send_status_email(status, detail=""):
     now_str = now_kst.strftime("%Y.%m.%d %H:%M")
 
     if status == "no_result":
-        subject = f"[부정여론 탐지] {now_kst.strftime('%m')}월 {now_kst.strftime('%d')}일 {now_kst.strftime('%H')}시 {now_kst.strftime('%M')}분 기준 | 탐지 없음"
+        subject = f"⚠️[부정여론 탐지] {now_kst.strftime('%m')}월 {now_kst.strftime('%d')}일 {now_kst.strftime('%H')}시 기준 | 탐지 없음"
         body_txt = f"정상 실행되었으나 부정 탐지 게시글이 없습니다.\n\n실행 시각: {now_str} KST"
         color    = "#2e7d32"
         title    = "탐지 없음 - 정상 실행"
@@ -101,7 +101,7 @@ def send_status_email(status, detail=""):
         color    = "#e65100"
         title    = "⚠️ 쿠키 만료 임박 - 재등록 필요"
     else:
-        subject  = f"[부정여론 탐지] {now_kst.strftime('%m')}월 {now_kst.strftime('%d')}일 {now_kst.strftime('%H')}시 {now_kst.strftime('%M')}분 기준 | 오류"
+        subject  = f"⚠️[부정여론 탐지] {now_kst.strftime('%m')}월 {now_kst.strftime('%d')}일 {now_kst.strftime('%H')}시 기준 | 오류"
         body_txt = f"오류가 발생했습니다.\n\n{detail}"
         color    = "#b71c1c"
         title    = "실행 오류 발생"
@@ -560,57 +560,76 @@ def build_card(post, idx, total):
 
 
 def group_similar_alerts(alert_posts):
-    """유사한 게시글을 이슈 단위로 묶음 처리
-    같은 날 제목 키워드가 유사하면(공통 명사 2개 이상) 하나의 이슈로 묶음
-    """
+    """Claude AI가 유사 이슈 여부를 판단해서 묶음 처리"""
     if len(alert_posts) <= 1:
         return alert_posts, []
 
-    import difflib
+    # 제목 목록을 Claude에 넘겨서 같은 이슈끼리 그룹 인덱스 반환
+    titles_text = "\n".join(
+        f"{i}. [{p['cafe_name']}] {p['title']}" for i, p in enumerate(alert_posts)
+    )
+    prompt = f"""아래는 네이버 카페에서 탐지된 한국투자증권 관련 게시글 목록입니다.
+같은 이슈(동일한 서비스 문제, 장애, 불만)를 다루는 글끼리 묶어주세요.
 
-    def get_keywords(title):
-        # 제목에서 의미있는 단어 추출 (2글자 이상)
-        words = re.findall(r"[가-힣a-zA-Z]{2,}", title)
-        stop = {"하는", "있는", "없는", "이거", "저도", "혹시", "어떻게", "어디서", "왜이럼", "인가요", "인지요", "같은"}
-        return set(w for w in words if w not in stop)
+{titles_text}
 
-    groups = []
-    used = set()
+규칙:
+- 같은 앱 오류/장애면 같은 그룹
+- 같은 기능 문의면 같은 그룹
+- 명확히 다른 주제면 별도 그룹
+- 단독이면 자기 자신만 포함
 
-    for i, post in enumerate(alert_posts):
-        if i in used:
-            continue
-        group = [post]
-        kw_i = get_keywords(post["title"])
-        for j, other in enumerate(alert_posts):
-            if j <= i or j in used:
-                continue
-            kw_j = get_keywords(other["title"])
-            common = kw_i & kw_j
-            if len(common) >= 2:
-                group.append(other)
-                used.add(j)
-        used.add(i)
-        groups.append(group)
+반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트 없이 JSON만:
+{{"groups": [[0, 1], [2], [3, 4]]}}
+groups는 인덱스 리스트의 리스트. 모든 인덱스가 정확히 한 번씩 포함되어야 함."""
 
-    # 단일 게시글은 그대로, 묶인 그룹은 대표 게시글 + 관련글 표시
+    try:
+        response = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": CLAUDE_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": CLAUDE_MODEL,
+                "max_tokens": 300,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        resp = response.json()
+        if "error" in resp:
+            raise ValueError(resp["error"])
+        text = resp["content"][0]["text"].strip()
+        match = re.search(r'\{.*\}', text, re.S)
+        if not match:
+            raise ValueError("JSON 없음")
+        data = json.loads(match.group())
+        groups_idx = data.get("groups", [])
+
+        # 인덱스 검증 - 누락/중복 시 개별 처리로 폴백
+        all_idx = [i for g in groups_idx for i in g]
+        if sorted(all_idx) != list(range(len(alert_posts))):
+            raise ValueError("인덱스 불일치")
+
+    except Exception as e:
+        log(f"이슈 묶음 AI 판단 실패 ({e}) - 개별 처리")
+        return alert_posts, []
+
     flat_posts = []
-    grouped_info = []  # (대표 idx, 관련글 수, 공통 키워드)
-
-    for group in groups:
+    for group in groups_idx:
         if len(group) == 1:
-            flat_posts.append(group[0])
+            flat_posts.append(alert_posts[group[0]])
         else:
-            # 부정강도 가장 높은 걸 대표로
-            rep = max(group, key=lambda x: x.get("score", 0))
-            related = [p for p in group if p is not rep]
-            kw_i = get_keywords(rep["title"])
-            common_kws = kw_i
-            for p in related:
-                common_kws &= get_keywords(p["title"])
+            members = [alert_posts[i] for i in group]
+            rep = max(members, key=lambda x: x.get("score", 0))
+            related = [p for p in members if p is not rep]
             rep["related_posts"] = related
-            rep["common_keywords"] = list(common_kws)[:3]
+            rep["common_keywords"] = []
             flat_posts.append(rep)
+            log(f"유사 이슈 묶음: {[alert_posts[i]['title'][:20] for i in group]}")
 
     return flat_posts, []
 
@@ -621,7 +640,7 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count):
     now_str  = datetime.now(KST).strftime("%Y.%m.%d %H:%M")
 
     now_kst  = datetime.now(KST)
-    subject  = f"[부정여론 탐지] {now_kst.strftime('%m')}월 {now_kst.strftime('%d')}일 {now_kst.strftime('%H')}시 {now_kst.strftime('%M')}분 기준"
+    subject  = f"⚠️[부정여론 탐지] {now_kst.strftime('%m')}월 {now_kst.strftime('%d')}일 {now_kst.strftime('%H')}시 기준"
     banner_badge = f"AI 부정여론 탐지 · {total}건"
     banner_title = f"네이버 카페 부정 언급 {total}건 탐지"
 
