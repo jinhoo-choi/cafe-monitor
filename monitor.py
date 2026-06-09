@@ -231,7 +231,11 @@ def search_keyword(page, cafe_id, num_id, keyword):
     """카페 인카페 검색으로 키워드 포함 게시글 수집 (24시간 이내)"""
     # 인카페 검색 URL (실제 확인된 구조)
     encoded = urllib.parse.quote(keyword)
-    url = f"https://cafe.naver.com/f-e/cafes/{num_id}/menus/0?viewType=L&ta=ARTICLE_COMMENT&page=1&q={encoded}"
+    # 가계부/절약 카페는 제목 전용 검색으로 오탐 방지
+    if cafe_id in ["onepieceholicplus"]:
+        url = f"https://cafe.naver.com/f-e/cafes/{num_id}/menus/0?viewType=L&ta=TITLE&page=1&q={encoded}"
+    else:
+        url = f"https://cafe.naver.com/f-e/cafes/{num_id}/menus/0?viewType=L&ta=ARTICLE_COMMENT&page=1&q={encoded}"
     page.goto(url, wait_until="networkidle")
     page.wait_for_timeout(random.randint(3000, 6000))  # 랜덤 딜레이 (봇 탐지 방어)
 
@@ -290,7 +294,6 @@ def search_keyword(page, cafe_id, num_id, keyword):
                 post_time = datetime.now(KST)
             else:
                 post_time = parse_date(date_str)
-                log(f"  날짜 수집: raw={date_str!r} → parsed={post_time.strftime('%m.%d %H:%M %Z')}")
 
             # cutoff 초과 스킵
             if post_time < cutoff:
@@ -483,8 +486,16 @@ def build_card(post, idx, total):
     # raw_date 원본 그대로 표시 (네이버 검색결과 날짜 원본 사용)
     # HH:MM 형식이면 오늘 날짜를 KST 기준으로 붙임
     if raw_date and re.match(r"^\d{1,2}:\d{2}$", raw_date):
-        today_kst = datetime.now(KST).strftime("%Y.%m.%d")
-        date_str = f"{today_kst} {raw_date}"
+        # post_dt를 KST로 명시 변환 후 날짜 추출
+        if post_dt:
+            # timezone-aware면 KST로 변환, naive면 KST로 강제 지정
+            if post_dt.tzinfo is not None:
+                dt_kst = post_dt.astimezone(KST)
+            else:
+                dt_kst = post_dt.replace(tzinfo=KST)
+            date_str = dt_kst.strftime("%Y.%m.%d") + " " + raw_date
+        else:
+            date_str = datetime.now(KST).strftime("%Y.%m.%d") + " " + raw_date
     elif raw_date:
         date_str = raw_date.rstrip(".")
     else:
