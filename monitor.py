@@ -29,6 +29,8 @@ GMAIL_USER     = os.environ["GMAIL_USER"]
 GMAIL_APP_PW   = os.environ["GMAIL_APP_PW"]
 NOTIFY_EMAIL   = os.environ["NOTIFY_EMAIL"]
 RECIPIENTS     = [r.strip() for r in NOTIFY_EMAIL.split(",") if r.strip()]
+CC_EMAIL       = os.getenv("CC_EMAIL", "")
+CC_RECIPIENTS  = [r.strip() for r in CC_EMAIL.split(",") if r.strip()]
 CLAUDE_API_KEY = os.environ["CLAUDE_API_KEY"]
 CLAUDE_MODEL   = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")
 
@@ -399,7 +401,7 @@ def analyze_sentiment(title, body, keyword):
 반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트 없이 JSON만:
 {{"is_negative": true or false, "summary": "게시글 내용을 3줄 이내 요약 (객관적 서술체)", "score": 0~10, "reply": "추천 대응 답변"}}
 score는 부정 강도 (0=전혀 부정 아님, 10=매우 부정적)
-reply는 카페에서 친한 투자 선배가 댓글 달아주는 느낌으로. 2~3문장. 존댓말이지만 편하게. 어려운 말 쓰지 말고 핵심만. 불만이면 간단히 공감하고 해결방향 한 줄, 질문이면 아는 범위에서 짧게 답변. 대응이 불필요한 경우(한국투자증권 귀책 아닌 개인 투자 손실, 단순 중립 언급 등)는 그 이유를 짧게 작성 (예: "개인 투자 손실로 한국투자증권 귀책 없음", "단순 정보 공유로 대응 불필요")."""
+reply는 같은 카페 회원이 친근하게 댓글 달아주는 느낌. 2~3문장. 편한 존댓말. 핵심만 짧게. 반드시 지킬 규칙: (1) 수치·정책·사실 등 확인 안 된 내용은 단정하지 말고 "정확한 건 앱이나 고객센터에서 확인해보세요" 수준으로 마무리 (2) 불만글이면 가볍게 공감 한 마디 + 앱/고객센터 확인 안내 (3) 뉴스 공유·사건 사고 글은 "저도 봤는데 좀 당황스럽네요" 같은 가벼운 반응 수준으로, 금감원·보상 등 극단적 표현 금지 (4) 질문글이면 아는 선에서 짧게 + 불확실하면 "정확한 건 직접 확인해보시는 게 나을 것 같아요" (5) 대응 불필요한 경우 그 이유 한 줄."""
 
     try:
         response = requests.post(
@@ -749,12 +751,15 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count):
     msg["Subject"] = subject
     msg["From"]    = f"⚠️ eBiz 부정여론봇 <{GMAIL_USER}>"
     msg["To"]      = ", ".join(RECIPIENTS)
+    if CC_RECIPIENTS:
+        msg["Cc"]  = ", ".join(CC_RECIPIENTS)
     msg["Date"]    = now_kst.strftime("%a, %d %b %Y %H:%M:%S +0900")
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
+    all_recipients = RECIPIENTS + CC_RECIPIENTS
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(GMAIL_USER, GMAIL_APP_PW)
-        s.sendmail(GMAIL_USER, RECIPIENTS, msg.as_string())
+        s.sendmail(GMAIL_USER, all_recipients, msg.as_string())
     log(f"담당자 이메일 발송 완료 - {total}건")
 
 # ─────────────────────────────────────────
