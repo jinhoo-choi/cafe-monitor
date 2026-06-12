@@ -43,6 +43,7 @@ jobs:
           GMAIL_APP_PW:   ${{ secrets.GMAIL_APP_PW }}
           NOTIFY_EMAIL:   ${{ secrets.NOTIFY_EMAIL }}
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+          CC_EMAIL:       ${{ secrets.CC_EMAIL }}
         run: python monitor.py
 
       - name: DB 변경사항 커밋
