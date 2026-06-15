@@ -406,7 +406,7 @@ def analyze_sentiment(title, body, keyword):
 반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트 없이 JSON만:
 {{"is_negative": true or false, "summary": "게시글 내용을 3줄 이내 요약 (객관적 서술체)", "score": 0~10, "reply": "추천 대응 답변"}}
 score는 부정 강도 (0=전혀 부정 아님, 10=매우 부정적)
-reply는 같은 카페 회원이 친근하게 댓글 달아주는 느낌. 2~3문장. 편한 존댓말. 핵심만 짧게. 반드시 지킬 규칙: (1) 수치·정책·사실 등 확인 안 된 내용은 단정하지 말고 "정확한 건 앱이나 고객센터에서 확인해보세요" 수준으로 마무리 (2) 불만글이면 가볍게 공감 한 마디 + 앱/고객센터 확인 안내 (3) 뉴스 공유·사건 사고 글은 "저도 봤는데 좀 당황스럽네요" 같은 가벼운 반응 수준으로, 금감원·보상 등 극단적 표현 금지 (4) 질문글이면 아는 선에서 짧게 + 불확실하면 "정확한 건 직접 확인해보시는 게 나을 것 같아요" (5) 대응 불필요한 경우 그 이유 한 줄."""
+reply는 같은 카페 회원이 친근하게 댓글 달아주는 느낌. 2~3문장. 편한 존댓말. 핵심만 짧게. 반드시 지킬 규칙: (1) 고객센터 번호가 필요하면 반드시 "1544-5000"만 사용. 다른 번호는 절대 만들어내지 말 것 (2) URL·구체적 수치·정책 등 확인 안 된 내용은 단정하지 말고 "정확한 건 앱이나 고객센터에서 확인해보세요" 수준으로 마무리 (3) 불만글이면 가볍게 공감 한 마디 + 앱/고객센터 확인 안내 (4) 뉴스 공유·사건 사고 글은 "저도 봤는데 좀 당황스럽네요" 같은 가벼운 반응 수준으로, 금감원·보상 등 극단적 표현 금지 (5) 질문글이면 아는 선에서 짧게 + 불확실하면 "정확한 건 직접 확인해보시는 게 나을 것 같아요" (6) 대응 불필요한 경우 그 이유 한 줄."""
 
     try:
         response = requests.post(
@@ -449,7 +449,18 @@ reply는 같은 카페 회원이 친근하게 댓글 달아주는 느낌. 2~3문
         match = re.search(r'\{.*\}', text, re.S)
         if not match:
             raise ValueError("JSON 응답 없음")
-        return json.loads(match.group())
+        result = json.loads(match.group())
+        # AI가 만들어낸 전화번호 할루시네이션 방지 - 1544-5000 외 모든 번호 교체
+        if "reply" in result and result["reply"]:
+            # 02-1234-5678 (3그룹) 또는 1588-1234 (2그룹) 형태 모두 매칭
+            phone_pattern = re.compile(r"(\(?)((?:\d{2,4}[-.])?\d{3,4}[-.]\d{4})(\)?)")
+            def fix_phone(m):
+                num = re.sub(r"[^0-9]", "", m.group(2))
+                if num == "15445000":
+                    return m.group()
+                return f"{m.group(1)}1544-5000{m.group(3)}"
+            result["reply"] = phone_pattern.sub(fix_phone, result["reply"])
+        return result
     except Exception as e:
         log(f"AI 분석 오류: {e}")
         return {"is_negative": False, "summary": "분석 실패", "score": 0, "reply": ""}
