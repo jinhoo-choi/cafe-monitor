@@ -239,7 +239,11 @@ def search_keyword(page, cafe_id, num_id, keyword):
         url = f"https://cafe.naver.com/f-e/cafes/{num_id}/menus/0?viewType=L&ta=TITLE&page=1&q={encoded}"
     else:
         url = f"https://cafe.naver.com/f-e/cafes/{num_id}/menus/0?viewType=L&ta=ARTICLE_COMMENT&page=1&q={encoded}"
-    page.goto(url, wait_until="networkidle")
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=20000)
+    except Exception as e:
+        log(f"  페이지 로드 타임아웃, 재시도: {e}")
+        page.goto(url, wait_until="domcontentloaded", timeout=20000)
     page.wait_for_timeout(random.randint(3000, 6000))  # 랜덤 딜레이 (봇 탐지 방어)
 
     log(f"  검색: [{keyword}] → {url[:80]}")
