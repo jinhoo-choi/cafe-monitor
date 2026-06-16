@@ -46,6 +46,13 @@ CAFES = [
     {"id": "geobuk2",     "num_id": "26251287", "name": "거북이 투자법"},
     {"id": "ustock",      "num_id": "15112066", "name": "평생주식카페"},
     {"id": "onepieceholicplus", "num_id": "22290117", "name": "월급쟁이 재테크 연구카페"},
+    {"id": "pointns",          "num_id": "25873056", "name": "주식투자는 달팽이처럼"},
+    {"id": "wjdrkrjqn",        "num_id": "30786704", "name": "정가를 거부하는 사람들"},
+    {"id": "stocktraining",    "num_id": "29798500", "name": "나는 주식트레이더다"},
+    {"id": "dlxogns01",        "num_id": "23676262", "name": "배당 투자자 모임"},
+    {"id": "engmstudy",        "num_id": "14028420", "name": "짠돌이카페"},
+    {"id": "hayate1",          "num_id": "11560463", "name": "주식광장"},
+    {"id": "divclub",          "num_id": "31050378", "name": "은퇴후 50년"},
 ]
 
 KEYWORDS    = ["한국투자증권", "한투", "뱅키스", "BanKIS"]
