@@ -249,8 +249,10 @@ def parse_date(date_str):
             return now - timedelta(hours=int(date_str.replace("시간 전", "").strip()))
         if ":" in date_str:
             t = datetime.strptime(date_str, "%H:%M")
-            # now는 KST aware → 시/분만 교체, tzinfo는 그대로 유지
+            # 네이버 f-e 검색 목록의 HH:MM은 UTC+9가 이중 적용된 값으로 내려옴
+            # (실제 KST 06:53인데 15:53으로 표시됨) → 9시간 빼서 보정
             parsed = now.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
+            parsed = parsed - timedelta(hours=9)
             # 미래 시각이면 전날로 처리
             if parsed > now:
                 parsed -= timedelta(days=1)
@@ -454,6 +456,7 @@ def analyze_sentiment(title, body, keyword):
 - 시장 전반 불만 또는 타 증권사 불만
 - 한국투자증권 단순 언급 (중립·긍정 문맥)
 - 일반 투자 손실 (한국투자증권 귀책 아닌 경우)
+- 영웅문·키움·미래에셋·삼성증권·NH·신한·KB 등 타 증권사 앱·서비스 문제 (댓글에 한투가 단순 언급된 경우 포함)
 
 반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트 없이 JSON만:
 {{"is_negative": true or false, "summary": "게시글 내용을 3줄 이내 요약 (객관적 서술체)", "score": 0~10, "reply": "추천 대응 답변"}}
