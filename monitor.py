@@ -345,34 +345,51 @@ def get_post_list(page, cafe_id, num_id):
 # ─────────────────────────────────────────
 
 def get_post_detail(page, post_url, cafe_id):
-    """본문 텍스트 반환"""
-    # iframe 내부 URL로 직접 접근 (ca-fe 도메인)
-    # post_url: https://cafe.naver.com/f-e/cafes/{num_id}/articles/{articleId}
-    # → iframe src: https://cafe.naver.com/ca-fe/cafes/{num_id}/articles/{articleId}?fromNext=true
-    inner_url = post_url.replace("/f-e/cafes/", "/ca-fe/cafes/") + "?fromNext=true"
+    """본문 텍스트 반환 - f-e URL로 접근 후 iframe에서 본문 파싱"""
+    BODY_SELECTORS = [
+        ".se-main-container",
+        ".ArticleContentBox",
+        ".article-viewer",
+        ".ContentRenderer",
+        "#tbody",
+        ".article_body",
+        ".se-component-content",
+    ]
+
     try:
-        page.goto(inner_url, wait_until="domcontentloaded", timeout=15000)
-        page.wait_for_timeout(random.randint(1500, 3000))  # 랜덤 딜레이 (봇 탐지 방어)
+        page.goto(post_url, wait_until="domcontentloaded", timeout=15000)
+        page.wait_for_timeout(random.randint(2000, 3500))
     except Exception:
-        # 타임아웃 시 현재 상태로 진행
         page.wait_for_timeout(1000)
 
-    frame = page
-
-    # 본문 셀렉터 (새 FE 구조)
     body = ""
+
+    # 1) page.frames 순회 → ca-fe iframe 내부에서 본문 파싱
     try:
-        body_el = (frame.query_selector(".se-main-container") or
-                   frame.query_selector(".ArticleContentBox") or
-                   frame.query_selector(".article-viewer") or
-                   frame.query_selector(".ContentRenderer") or
-                   frame.query_selector("#tbody") or
-                   frame.query_selector(".article_body") or
-                   frame.query_selector(".se-component-content"))
-        if body_el:
-            body = body_el.inner_text().strip()[:2000]
+        for frame in page.frames:
+            if "ca-fe" in frame.url or "articles" in frame.url:
+                for sel in BODY_SELECTORS:
+                    el = frame.query_selector(sel)
+                    if el:
+                        body = el.inner_text().strip()[:2000]
+                        if body:
+                            break
+                if body:
+                    break
     except Exception as e:
-        log(f"본문 파싱 오류: {e}")
+        log(f"iframe 접근 오류: {e}")
+
+    # 2) iframe 실패 시 현재 page에서 직접 파싱 (fallback)
+    if not body:
+        try:
+            for sel in BODY_SELECTORS:
+                el = page.query_selector(sel)
+                if el:
+                    body = el.inner_text().strip()[:2000]
+                    if body:
+                        break
+        except Exception as e:
+            log(f"본문 직접 파싱 오류: {e}")
 
     if not body:
         log("본문 비어 있음 - 제목만으로 AI 분석 진행")
