@@ -56,7 +56,7 @@ CAFES = [
     {"id": "divclub",          "num_id": "31050378", "name": "은퇴후 50년"},
 ]
 
-KEYWORDS    = ["한국투자증권", "한투", "뱅키스", "BanKIS"]
+KEYWORDS    = ["한국투자증권", "한투", "뱅키스"]
 DB_FILE      = "seen_posts.json"
 TIME_WINDOW = 24   # 탐지 범위 (시간) - 24시간 기준, 일 1회 발송
 
