@@ -103,6 +103,9 @@ AD_SKIP_PATTERNS = [
     "피해 전문", "전문 변호사", "법률 상담",
     # 투자 리딩방 광고 유형
     "리딩방", "투자 리딩", "수익 인증",
+    # 가계부·생활비 일상 글 (월급쟁이 재테크 카페 등 - 한투 단순 언급)
+    "가계부", "생활비", "무지출", "짠테크",
+    "알뜰살뜰", "알뜰행복", "알뜰환희", "온스블리",
 ]
 
 KST = timezone(timedelta(hours=9))
@@ -870,17 +873,25 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count, unresolved_posts
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"]    = f"⚠️ eBiz 부정여론봇 <{GMAIL_USER}>"
-    msg["To"]      = ", ".join(RECIPIENTS)
-    if CC_RECIPIENTS:
-        msg["Cc"]  = ", ".join(CC_RECIPIENTS)
     msg["Date"]    = now_kst.strftime("%a, %d %b %Y %H:%M:%S +0900")
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
-    all_recipients = RECIPIENTS + CC_RECIPIENTS
+    # unresolved 단독 발송 시 발신자에게만, 부정여론 탐지 시 담당자 전체 발송
+    if total > 0:
+        msg["To"] = ", ".join(RECIPIENTS)
+        if CC_RECIPIENTS:
+            msg["Cc"] = ", ".join(CC_RECIPIENTS)
+        all_recipients = RECIPIENTS + CC_RECIPIENTS
+        log_target = f"담당자 전체 ({len(all_recipients)}명)"
+    else:
+        msg["To"] = GMAIL_USER
+        all_recipients = [GMAIL_USER]
+        log_target = f"발신자 전용 (확인필요 단독)"
+
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(GMAIL_USER, GMAIL_APP_PW)
         s.sendmail(GMAIL_USER, all_recipients, msg.as_string())
-    log(f"담당자 이메일 발송 완료 - {total}건")
+    log(f"이메일 발송 완료 - {log_target}")
 
 # ─────────────────────────────────────────
 # 메인
