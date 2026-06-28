@@ -54,3 +54,37 @@ jobs:
           git add seen_posts.json || true
           git diff --cached --quiet || git commit -m "update seen_posts.json"
           git pull --rebase origin main && git push origin main || echo "push 실패 - 다음 실행에서 재시도"
+
+      # ── 디버그 분석 스텝 (debug_analyzer.py 존재 시에만 실행) ──────
+      # monitor.py에 [DEBUG] 로그가 있는 동안 하루 1회 자동 수정 시도
+      # 수정 완료 후 debug_analyzer.py는 workflow에서 제거됨
+      - name: 디버그 로그 분석 및 자동 수정
+        if: always()
+        env:
+          GMAIL_USER:     ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PW:   ${{ secrets.GMAIL_APP_PW }}
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+          GH_TOKEN:       ${{ secrets.GH_PAT }}
+        run: |
+          if [ -f debug_analyzer.py ]; then
+            echo "debug_analyzer.py 발견 - 실행"
+            python debug_analyzer.py
+          else
+            echo "debug_analyzer.py 없음 - 스킵"
+          fi
+
+      # ── 패치 검증 스텝 (verify_patch.py 존재 시에만 실행) ──────────
+      # debug_analyzer 실행 다음날 패치 효과 자동 검증
+      - name: 패치 효과 검증
+        if: always()
+        env:
+          GMAIL_USER:     ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PW:   ${{ secrets.GMAIL_APP_PW }}
+          GH_TOKEN:       ${{ secrets.GH_PAT }}
+        run: |
+          if [ -f verify_patch.py ]; then
+            echo "verify_patch.py 발견 - 실행"
+            python verify_patch.py
+          else
+            echo "verify_patch.py 없음 - 스킵"
+          fi
