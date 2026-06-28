@@ -404,30 +404,48 @@ def get_post_detail(page, post_url, cafe_id):
         ".article_body",
         ".se-component-content",
     ]
+    # 셀렉터 조합 문자열 (wait_for_selector용)
+    SELECTOR_COMBINED = ", ".join(BODY_SELECTORS)
 
     try:
         page.goto(post_url, wait_until="domcontentloaded", timeout=15000)
-        page.wait_for_timeout(random.randint(2000, 3500))
     except Exception as e:
         log(f"  본문 페이지 로드 실패 (제목만으로 분석 진행): {e}")
         page.wait_for_timeout(1000)
+        return ""
+
+    # [개선 C] 고정 랜덤 대기 → 본문 요소 뜰 때까지 능동적 대기 (최대 8초)
+    # 성공 케이스는 요소 감지 즉시 진행, 실패 케이스만 최대 8초 소요
+    try:
+        page.wait_for_selector(SELECTOR_COMBINED, timeout=8000)
+    except Exception:
+        # 타임아웃 시 iframe 내부에 있을 수 있으므로 fallback으로 계속 진행
+        page.wait_for_timeout(random.randint(1500, 2500))
 
     body = ""
 
+    # [개선 B] iframe URL 조건 완화: naver.com 포함 + 메인 프레임 제외
+    # 기존: "ca-fe" or "articles" → ArticleRead.nhn 등 미매칭 케이스 존재
     try:
         for frame in page.frames:
-            if "ca-fe" in frame.url or "articles" in frame.url:
+            frame_url = frame.url or ""
+            if "naver.com" in frame_url and frame_url != page.url and frame_url != "about:blank":
                 for sel in BODY_SELECTORS:
-                    el = frame.query_selector(sel)
-                    if el:
-                        body = el.inner_text().strip()[:2000]
-                        if body:
-                            break
+                    try:
+                        el = frame.query_selector(sel)
+                        if el:
+                            body = el.inner_text().strip()[:2000]
+                            if body:
+                                break
+                    except Exception:
+                        continue
                 if body:
+                    log(f"  iframe 본문 수집 성공: {frame_url[:60]}")
                     break
     except Exception as e:
-        log(f"iframe 접근 오류: {e}")
+        log(f"  iframe 접근 오류: {e}")
 
+    # fallback: iframe 실패 시 현재 page에서 직접 파싱
     if not body:
         try:
             for sel in BODY_SELECTORS:
@@ -435,12 +453,13 @@ def get_post_detail(page, post_url, cafe_id):
                 if el:
                     body = el.inner_text().strip()[:2000]
                     if body:
+                        log(f"  직접 파싱 본문 수집 성공")
                         break
         except Exception as e:
-            log(f"본문 직접 파싱 오류: {e}")
+            log(f"  본문 직접 파싱 오류: {e}")
 
     if not body:
-        log("본문 비어 있음 - 제목만으로 AI 분석 진행")
+        log("  본문 비어 있음 - 제목만으로 AI 분석 진행")
 
     return body
 
