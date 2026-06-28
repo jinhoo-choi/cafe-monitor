@@ -64,7 +64,7 @@ jobs:
           GMAIL_USER:     ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PW:   ${{ secrets.GMAIL_APP_PW }}
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
-          GH_TOKEN:       ${{ secrets.GH_PAT }}
+          GH_TOKEN:       ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ -f debug_analyzer.py ]; then
             echo "debug_analyzer.py 발견 - 실행"
@@ -80,7 +80,7 @@ jobs:
         env:
           GMAIL_USER:     ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PW:   ${{ secrets.GMAIL_APP_PW }}
-          GH_TOKEN:       ${{ secrets.GH_PAT }}
+          GH_TOKEN:       ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ -f verify_patch.py ]; then
             echo "verify_patch.py 발견 - 실행"
