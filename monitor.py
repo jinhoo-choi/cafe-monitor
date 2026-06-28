@@ -427,6 +427,10 @@ def get_post_detail(page, post_url, cafe_id):
     # [개선 B] iframe URL 조건 완화: naver.com 포함 + 메인 프레임 제외
     # 기존: "ca-fe" or "articles" → ArticleRead.nhn 등 미매칭 케이스 존재
     try:
+        # [DEBUG] 실제 로드된 프레임 URL 전체 출력 (원인 파악 후 제거 예정)
+        all_frames = [(f.url or "") for f in page.frames]
+        log(f"  [DEBUG] page.url={page.url[:80]}")
+        log(f"  [DEBUG] frames({len(all_frames)}): {all_frames[:5]}")
         for frame in page.frames:
             frame_url = frame.url or ""
             if "naver.com" in frame_url and frame_url != page.url and frame_url != "about:blank":
