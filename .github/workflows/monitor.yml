@@ -2,6 +2,8 @@ name: 네이버 카페 부정여론 모니터링
 
 on:
   workflow_dispatch:          # cron-job.org 또는 수동 실행
+  schedule:
+    - cron: '0 1 * * *'      # 10:00 KST (01:00 UTC) - debug_analyzer/verify_patch 전용
 
 permissions:
   contents: write
@@ -37,7 +39,9 @@ jobs:
           ${{ secrets.NAVER_COOKIES_JSON }}
           EOF
 
+      # 모니터링 실행 - workflow_dispatch(cron-job.org)일 때만
       - name: 모니터링 실행
+        if: github.event_name == 'workflow_dispatch'
         env:
           GMAIL_USER:     ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PW:   ${{ secrets.GMAIL_APP_PW }}
@@ -47,7 +51,7 @@ jobs:
         run: python monitor.py
 
       - name: DB 변경사항 커밋
-        if: always()
+        if: github.event_name == 'workflow_dispatch'
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
@@ -55,11 +59,10 @@ jobs:
           git diff --cached --quiet || git commit -m "update seen_posts.json"
           git pull --rebase origin main && git push origin main || echo "push 실패 - 다음 실행에서 재시도"
 
-      # ── 디버그 분석 스텝 (debug_analyzer.py 존재 시에만 실행) ──────
-      # monitor.py에 [DEBUG] 로그가 있는 동안 하루 1회 자동 수정 시도
-      # 수정 완료 후 debug_analyzer.py는 workflow에서 제거됨
+      # ── 디버그 분석 스텝 - schedule(10:00 KST)일 때만 ──────────────
+      # monitor.py [DEBUG] 로그 분석 → get_post_detail() 자동 수정 푸시
       - name: 디버그 로그 분석 및 자동 수정
-        if: always()
+        if: github.event_name == 'schedule'
         env:
           GMAIL_USER:     ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PW:   ${{ secrets.GMAIL_APP_PW }}
@@ -73,10 +76,10 @@ jobs:
             echo "debug_analyzer.py 없음 - 스킵"
           fi
 
-      # ── 패치 검증 스텝 (verify_patch.py 존재 시에만 실행) ──────────
-      # debug_analyzer 실행 다음날 패치 효과 자동 검증
+      # ── 패치 검증 스텝 - schedule(10:00 KST)일 때만 ────────────────
+      # 수정된 monitor.py 효과 검증 → 결과 메일 발송
       - name: 패치 효과 검증
-        if: always()
+        if: github.event_name == 'schedule'
         env:
           GMAIL_USER:     ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PW:   ${{ secrets.GMAIL_APP_PW }}
