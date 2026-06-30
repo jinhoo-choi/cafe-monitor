@@ -25,11 +25,18 @@ def log(msg):
     print(f"[{datetime.now(KST).strftime('%H:%M:%S')}] {msg}")
 
 def get_latest_log():
+    """가장 최근 'workflow_dispatch'(monitor.py 실행) run의 로그 조회
+    ※ schedule 트리거 자신의 run은 monitor.py를 실행하지 않으므로 제외해야 함"""
     r = requests.get(
-        f"https://api.github.com/repos/{REPO}/actions/runs?per_page=1",
+        f"https://api.github.com/repos/{REPO}/actions/runs"
+        f"?event=workflow_dispatch&status=success&per_page=1",
         headers={"Authorization": f"token {GH_TOKEN}"},
     )
-    run_id = r.json()["workflow_runs"][0]["id"]
+    runs = r.json().get("workflow_runs", [])
+    if not runs:
+        raise RuntimeError("workflow_dispatch run 없음 - monitor.py 실행 기록 없음")
+    run_id = runs[0]["id"]
+    log(f"대상 run_id(workflow_dispatch): {run_id} | created_at={runs[0]['created_at']}")
     r2 = requests.get(
         f"https://api.github.com/repos/{REPO}/actions/runs/{run_id}/jobs",
         headers={"Authorization": f"token {GH_TOKEN}"},
@@ -143,3 +150,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
