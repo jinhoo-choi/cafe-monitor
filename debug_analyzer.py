@@ -32,18 +32,20 @@ def log(msg):
 # ── 1. 최근 Actions 실행에서 [DEBUG] 라인 추출 ──────────────────────
 
 def get_debug_lines():
-    """최근 workflow_run 로그에서 [DEBUG] 라인 추출"""
-    # 최신 run 조회
+    """가장 최근 'workflow_dispatch'(monitor.py 실행) run의 로그에서 [DEBUG] 라인 추출
+    ※ schedule(10:00 KST) 트리거 자신의 run은 monitor.py를 실행하지 않으므로
+       반드시 event=workflow_dispatch 로 필터링해야 함"""
     r = requests.get(
-        f"https://api.github.com/repos/{REPO}/actions/runs?per_page=1",
+        f"https://api.github.com/repos/{REPO}/actions/runs"
+        f"?event=workflow_dispatch&status=success&per_page=1",
         headers={"Authorization": f"token {GH_TOKEN}"},
     )
     runs = r.json().get("workflow_runs", [])
     if not runs:
-        raise RuntimeError("workflow_runs 없음")
+        raise RuntimeError("workflow_dispatch run 없음 - monitor.py 실행 기록 없음")
 
     run_id = runs[0]["id"]
-    log(f"최신 run_id: {run_id}")
+    log(f"대상 run_id(workflow_dispatch): {run_id} | created_at={runs[0]['created_at']}")
 
     # job_id 조회
     r2 = requests.get(
@@ -358,3 +360,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
