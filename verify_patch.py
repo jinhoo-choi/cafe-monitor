@@ -112,6 +112,54 @@ def send_verify_email(status, stats):
         s.sendmail(GMAIL_USER, GMAIL_USER, msg.as_string())
     log(f"검증 결과 메일 발송 → {GMAIL_USER}")
 
+def remove_schedule_trigger():
+    """검증 완료 후 workflow.yml에서 schedule 트리거 자동 제거
+    (debug_analyzer/verify_patch는 휴가 기간 1회성 자동화이므로,
+     검증 끝나면 매일 도는 schedule을 스스로 제거해 무한 반복 방지)"""
+    GH_TOKEN = os.environ["GH_TOKEN"]
+    REPO     = "jinhoo-choi/cafe-monitor"
+    path     = ".github/workflows/monitor.yml"
+
+    r = requests.get(
+        f"https://api.github.com/repos/{REPO}/contents/{path}",
+        headers={"Authorization": f"token {GH_TOKEN}"},
+    )
+    d = r.json()
+    src = base64.b64decode(d["content"]).decode()
+    sha = d["sha"]
+
+    if "schedule:" not in src:
+        log("schedule 트리거 이미 없음 - 스킵")
+        return False
+
+    # schedule 블록 (2줄: "  schedule:" + "    - cron: ...") 제거
+    new_src = re.sub(
+        r"\n  schedule:\n    - cron: '0 1 \* \* \*'.*?\n",
+        "\n",
+        src,
+    )
+
+    if new_src == src:
+        log("⚠️ schedule 블록 패턴 미매칭 - 수동 확인 필요")
+        return False
+
+    content = base64.b64encode(new_src.encode()).decode()
+    resp = requests.put(
+        f"https://api.github.com/repos/{REPO}/contents/{path}",
+        headers={"Authorization": f"token {GH_TOKEN}"},
+        json={
+            "message": "chore(auto): 검증 완료 - debug/verify schedule 트리거 자동 제거",
+            "content": content,
+            "sha": sha,
+        },
+    )
+    result = resp.json()
+    if "commit" in result:
+        log(f"✅ schedule 트리거 제거 완료 — {result['commit']['sha'][:7]}")
+        return True
+    log(f"❌ schedule 제거 실패: {result}")
+    return False
+
 def main():
     log("=== verify_patch 시작 ===")
     try:
@@ -138,6 +186,10 @@ def main():
         else:
             status = "fail"
 
+        # 검증 완료 시점에 schedule 트리거 자동 제거 (성공/부분개선/실패 무관 - 1회성 검증 종료)
+        removed = remove_schedule_trigger()
+        stats["스케줄 자동 정리"] = "✅ schedule 트리거 제거됨" if removed else "⚠️ 제거 안 됨 (수동 확인 필요)"
+
         send_verify_email(status, stats)
 
     except Exception as e:
@@ -150,4 +202,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
