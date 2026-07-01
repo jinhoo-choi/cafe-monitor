@@ -89,11 +89,19 @@ def get_monitor_py():
 def generate_fix(debug_lines, current_src):
     """디버그 로그 기반으로 get_post_detail() 수정본 생성"""
 
-    # 현재 get_post_detail 함수만 추출
-    m = re.search(r"(def get_post_detail\(.*?)(?=\ndef )", current_src, re.S)
-    if not m:
+    # 현재 get_post_detail 함수만 추출 (줄 기반)
+    lines = current_src.splitlines(keepends=True)
+    start = None
+    end   = None
+    for i, line in enumerate(lines):
+        if line.startswith("def get_post_detail("):
+            start = i
+        elif start is not None and line.startswith("def ") and i > start:
+            end = i
+            break
+    if start is None or end is None:
         raise RuntimeError("get_post_detail 함수 추출 실패")
-    current_func = m.group(1)
+    current_func = "".join(lines[start:end]).rstrip()
 
     debug_text = "\n".join(debug_lines) if debug_lines else "(디버그 라인 없음)"
 
@@ -190,13 +198,21 @@ def validate_fix(new_func, new_src):
 # ── 5. monitor.py에 새 함수 적용 ────────────────────────────────────
 
 def apply_fix(current_src, new_func):
-    """현재 src에서 get_post_detail() 함수를 새 함수로 교체"""
-    pattern = r"def get_post_detail\(.*?)(?=\ndef )"
-    m = re.search(pattern, current_src, re.S)
-    if not m:
-        raise RuntimeError("get_post_detail 교체 위치 찾기 실패")
+    """현재 src에서 get_post_detail() 함수를 새 함수로 교체 (줄 기반)"""
+    lines = current_src.splitlines(keepends=True)
+    start = None
+    end   = None
+    for i, line in enumerate(lines):
+        if line.startswith("def get_post_detail("):
+            start = i
+        elif start is not None and line.startswith("def ") and i > start:
+            end = i
+            break
 
-    new_src = current_src[:m.start()] + new_func + "\n" + current_src[m.end():]
+    if start is None or end is None:
+        raise RuntimeError("get_post_detail 함수 범위 찾기 실패")
+
+    new_src = "".join(lines[:start]) + new_func + "\n\n" + "".join(lines[end:])
     return new_src
 
 # ── 6. GitHub 푸시 ───────────────────────────────────────────────────
@@ -360,4 +376,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
