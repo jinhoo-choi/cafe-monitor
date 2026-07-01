@@ -947,7 +947,10 @@ def main():
                 expiring_soon = []
                 for c in cookies:
                     exp = c.get("expires", -1)
-                    if 0 < exp < now_ts + (3 * 24 * 3600):
+                    # now_ts < exp: 아직 유효한 쿠키 중에서
+                    # exp < now_ts + 3일: 3일 이내 만료 예정인 것만 경고
+                    # (이미 만료된 쿠키는 크롤링에 영향 없으므로 제외)
+                    if now_ts < exp < now_ts + (3 * 24 * 3600):
                         expiring_soon.append(c.get("name", "unknown"))
                 if expiring_soon:
                     send_status_email("warning",
@@ -1090,3 +1093,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
