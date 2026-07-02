@@ -405,7 +405,6 @@ def get_post_detail(page, post_url, cafe_id):
         ".article_body",
         ".se-component-content",
     ]
-    # 셀렉터 조합 문자열 (wait_for_selector용)
     SELECTOR_COMBINED = ", ".join(BODY_SELECTORS)
 
     try:
@@ -415,26 +414,18 @@ def get_post_detail(page, post_url, cafe_id):
         page.wait_for_timeout(1000)
         return ""
 
-    # [개선 C] 고정 랜덤 대기 → 본문 요소 뜰 때까지 능동적 대기 (최대 8초)
-    # 성공 케이스는 요소 감지 즉시 진행, 실패 케이스만 최대 8초 소요
     try:
         page.wait_for_selector(SELECTOR_COMBINED, timeout=8000)
     except Exception:
-        # 타임아웃 시 iframe 내부에 있을 수 있으므로 fallback으로 계속 진행
         page.wait_for_timeout(random.randint(1500, 2500))
 
     body = ""
 
-    # [개선 B] iframe URL 조건 완화: naver.com 포함 + 메인 프레임 제외
-    # 기존: "ca-fe" or "articles" → ArticleRead.nhn 등 미매칭 케이스 존재
+    # 1순위: ca-fe URL 패턴 iframe 우선 탐색 (실제 본문 렌더링 프레임)
     try:
-        # [DEBUG] 실제 로드된 프레임 URL 전체 출력 (원인 파악 후 제거 예정)
-        all_frames = [(f.url or "") for f in page.frames]
-        log(f"  [DEBUG] page.url={page.url[:80]}")
-        log(f"  [DEBUG] frames({len(all_frames)}): {all_frames[:5]}")
         for frame in page.frames:
             frame_url = frame.url or ""
-            if "naver.com" in frame_url and frame_url != page.url and frame_url != "about:blank":
+            if "ca-fe" in frame_url and "articles" in frame_url:
                 for sel in BODY_SELECTORS:
                     try:
                         el = frame.query_selector(sel)
@@ -445,12 +436,61 @@ def get_post_detail(page, post_url, cafe_id):
                     except Exception:
                         continue
                 if body:
-                    log(f"  iframe 본문 수집 성공: {frame_url[:60]}")
+                    log(f"  iframe(ca-fe) 본문 수집 성공")
                     break
     except Exception as e:
-        log(f"  iframe 접근 오류: {e}")
+        log(f"  iframe(ca-fe) 접근 오류: {e}")
 
-    # fallback: iframe 실패 시 현재 page에서 직접 파싱
+    # 2순위: naver.com 포함 전체 iframe 탐색 (메인 프레임 및 빈 프레임 제외)
+    if not body:
+        try:
+            for frame in page.frames:
+                frame_url = frame.url or ""
+                if (
+                    "naver.com" in frame_url
+                    and frame_url != page.url
+                    and frame_url != "about:blank"
+                    and "ca-fe" not in frame_url  # 이미 위에서 탐색 완료
+                ):
+                    for sel in BODY_SELECTORS:
+                        try:
+                            el = frame.query_selector(sel)
+                            if el:
+                                body = el.inner_text().strip()[:2000]
+                                if body:
+                                    break
+                        except Exception:
+                            continue
+                    if body:
+                        log(f"  iframe(fallback) 본문 수집 성공")
+                        break
+        except Exception as e:
+            log(f"  iframe(fallback) 접근 오류: {e}")
+
+    # 3순위: 모든 iframe 대상 탐색 (URL 조건 없이)
+    if not body:
+        try:
+            for frame in page.frames:
+                frame_url = frame.url or ""
+                if frame_url == "about:blank":
+                    continue
+                for sel in BODY_SELECTORS:
+                    try:
+                        el = frame.query_selector(sel)
+                        if el:
+                            candidate = el.inner_text().strip()[:2000]
+                            if candidate:
+                                body = candidate
+                                break
+                    except Exception:
+                        continue
+                if body:
+                    log(f"  iframe(any) 본문 수집 성공")
+                    break
+        except Exception as e:
+            log(f"  iframe(any) 접근 오류: {e}")
+
+    # 4순위: 현재 page에서 직접 파싱
     if not body:
         try:
             for sel in BODY_SELECTORS:
@@ -467,10 +507,6 @@ def get_post_detail(page, post_url, cafe_id):
         log("  본문 비어 있음 - 제목만으로 AI 분석 진행")
 
     return body
-
-# ─────────────────────────────────────────
-# Claude AI 감성 분석
-# ─────────────────────────────────────────
 
 def analyze_sentiment(title, body, keyword):
     prompt = f"""다음은 네이버 카페 게시글입니다.
