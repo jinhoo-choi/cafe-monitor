@@ -54,6 +54,7 @@ CAFES = [
     {"id": "engmstudy",        "num_id": "14028420", "name": "짠돌이카페"},
     {"id": "hayate1",          "num_id": "11560463", "name": "주식광장"},
     {"id": "divclub",          "num_id": "31050378", "name": "은퇴후 50년"},
+    {"id": "moneyinsights",    "num_id": "31449216", "name": "돈이 되는 모든 정보"},
 ]
 
 KEYWORDS    = ["한국투자증권", "한투", "뱅키스"]
@@ -1130,4 +1131,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
