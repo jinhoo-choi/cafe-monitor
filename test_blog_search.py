@@ -72,28 +72,39 @@ def main():
             log(f"셀렉터 '{sel}' → {len(items)}건 매칭")
 
         # 가장 유력한 후보로 실제 데이터 추출 시도
-        log("\n--- 상세 추출 시도 ---")
-        links = page.query_selector_all("a")
-        blog_links = []
-        for a in links:
+        log("\n--- 상세 추출 시도 (a 태그 자체 텍스트 + 부모구조) ---")
+        anchors = page.query_selector_all("a[href*='blog.naver.com']")
+        log(f"blog.naver.com 앵커 태그 총 {len(anchors)}개")
+
+        seen_urls = set()
+        post_count = 0
+        for a in anchors:
             href = a.get_attribute("href") or ""
-            if "blog.naver.com" in href and href not in blog_links:
-                blog_links.append(href)
+            # 게시글 URL만 (블로거 홈이 아닌 postId 포함된 것)
+            import re
+            if not re.search(r'/\d{6,}(\?|$)', href):
+                continue
+            if href in seen_urls:
+                continue
+            seen_urls.add(href)
+            post_count += 1
 
-        log(f"blog.naver.com 링크 총 {len(blog_links)}개 발견")
-        for l in blog_links[:10]:
-            log(f"  {l}")
+            own_text = a.inner_text().strip()
+            log(f"\n  [{post_count}] URL: {href}")
+            log(f"       a태그 자체 텍스트: '{own_text[:80]}'")
 
-        # 타이틀 텍스트 후보 추출
-        log("\n--- 제목 텍스트 후보 ---")
-        title_candidates = page.query_selector_all(".title_link, .api_txt_lines, strong, .name")
-        for i, el in enumerate(title_candidates[:15]):
+            # 부모 요소들을 거슬러 올라가며 텍스트 확인
             try:
-                text = el.inner_text().strip()
-                if text and len(text) > 5:
-                    log(f"  [{i}] {text[:60]}")
-            except Exception:
-                pass
+                parent = a.evaluate_handle("el => el.closest('li') || el.parentElement.parentElement")
+                parent_text = parent.as_element().inner_text().strip() if parent.as_element() else ""
+                log(f"       부모(li) 텍스트: '{parent_text[:200]}'")
+            except Exception as e:
+                log(f"       부모 텍스트 추출 오류: {e}")
+
+            if post_count >= 8:
+                break
+
+        log(f"\n실제 게시글 URL(postId 포함) 고유 개수: {post_count}")
 
         # 전체 HTML 일부 덤프 (구조 파악용, 검색결과 영역만)
         log("\n--- HTML 구조 일부 ---")
