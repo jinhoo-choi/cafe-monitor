@@ -1,11 +1,20 @@
 """
 test_blog_fetch.py
 - blog.naver.com 실제 접근 가능 여부 검증용 1회성 테스트
-- Playwright로 지정 URL 접근 → 본문 추출 시도 → 결과 로그 출력
+- Playwright로 지정 URL 접근 → 본문 추출 시도 → 결과 메일 발송
 - 검증 후 이 파일은 삭제 예정
 """
 
+import os
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from datetime import datetime, timedelta, timezone
 from playwright.sync_api import sync_playwright
+
+KST = timezone(timedelta(hours=9))
+GMAIL_USER   = os.environ["GMAIL_USER"]
+GMAIL_APP_PW = os.environ["GMAIL_APP_PW"]
 
 TEST_URL = "https://m.blog.naver.com/lfg79/224341880031"
 
@@ -17,8 +26,26 @@ BODY_SELECTORS = [
     ".se-component-content",
 ]
 
+logs = []
+
 def log(msg):
-    print(f"[TEST] {msg}")
+    line = f"[TEST] {msg}"
+    print(line)
+    logs.append(line)
+
+def send_result_email():
+    now_str = datetime.now(KST).strftime("%Y.%m.%d %H:%M")
+    body = "\n".join(logs)
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"[블로그 검증] 테스트 결과 | {now_str} KST"
+    msg["From"] = f"블로그검증봇 <{GMAIL_USER}>"
+    msg["To"] = GMAIL_USER
+    msg.attach(MIMEText(f"<pre>{body}</pre>", "html", "utf-8"))
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
+        s.login(GMAIL_USER, GMAIL_APP_PW)
+        s.sendmail(GMAIL_USER, GMAIL_USER, msg.as_string())
+    print("결과 메일 발송 완료")
+
 
 def main():
     with sync_playwright() as p:
@@ -34,6 +61,7 @@ def main():
         except Exception as e:
             log(f"❌ 페이지 로드 실패: {e}")
             browser.close()
+            send_result_email()
             return
 
         page.wait_for_timeout(3000)
@@ -99,6 +127,7 @@ def main():
 
         log("=== 테스트 완료 ===")
         browser.close()
+    send_result_email()
 
 if __name__ == "__main__":
     main()
