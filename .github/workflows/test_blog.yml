@@ -22,8 +22,9 @@ jobs:
           playwright install chromium
           playwright install-deps chromium
 
-      - name: 블로그 검색 구조 검증
+      - name: 블로그 E2E 파이프라인 검증
         env:
-          GMAIL_USER:   ${{ secrets.GMAIL_USER }}
-          GMAIL_APP_PW: ${{ secrets.GMAIL_APP_PW }}
-        run: python test_blog_search.py
+          GMAIL_USER:     ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PW:   ${{ secrets.GMAIL_APP_PW }}
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+        run: python test_blog_e2e.py
