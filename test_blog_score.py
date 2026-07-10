@@ -128,16 +128,33 @@ def send_result_email(title, body, result):
     print("결과 메일 발송 완료")
 
 def main():
-    log("본문 재수집 중...")
-    title, body = get_blog_body_and_title()
-    log(f"제목: {title}")
-    log(f"본문 길이: {len(body)}자")
+    try:
+        log("본문 재수집 중...")
+        title, body = get_blog_body_and_title()
+        log(f"제목: {title}")
+        log(f"본문 길이: {len(body)}자")
 
-    log("Sonnet으로 채점 중...")
-    result = analyze_sentiment(title, body, "한국투자증권")
-    log(f"결과: {result}")
+        log("Sonnet으로 채점 중...")
+        result = analyze_sentiment(title, body, "한국투자증권")
+        log(f"결과: {result}")
 
-    send_result_email(title, body, result)
+        send_result_email(title, body, result)
+    except Exception as e:
+        import traceback
+        err = traceback.format_exc()
+        print(err)
+        try:
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = "[블로그 채점 테스트] 오류 발생"
+            msg["From"] = f"블로그검증봇 <{GMAIL_USER}>"
+            msg["To"] = GMAIL_USER
+            msg.attach(MIMEText(f"<pre>{err}</pre>", "html", "utf-8"))
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
+                s.login(GMAIL_USER, GMAIL_APP_PW)
+                s.sendmail(GMAIL_USER, GMAIL_USER, msg.as_string())
+        except Exception as e2:
+            print(f"오류 메일 발송도 실패: {e2}")
+        raise
 
 if __name__ == "__main__":
     main()
