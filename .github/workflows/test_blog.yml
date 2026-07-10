@@ -18,7 +18,7 @@ jobs:
 
       - name: 패키지 설치
         run: |
-          pip install playwright
+          pip install playwright requests
           playwright install chromium
           playwright install-deps chromium
 
