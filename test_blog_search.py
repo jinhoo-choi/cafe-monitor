@@ -1,0 +1,115 @@
+"""
+test_blog_search.py
+- 네이버 블로그 검색 결과 페이지의 실제 HTML 구조 검증
+- Playwright로 검색 → 결과 리스트 파싱 시도 → 결과 메일 발송
+"""
+
+import os
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from datetime import datetime, timedelta, timezone
+from playwright.sync_api import sync_playwright
+
+KST = timezone(timedelta(hours=9))
+GMAIL_USER   = os.environ["GMAIL_USER"]
+GMAIL_APP_PW = os.environ["GMAIL_APP_PW"]
+
+# 모바일 블로그 검색 - 최신순
+SEARCH_URL = "https://m.search.naver.com/search.naver?where=m_blog&query=%ED%95%9C%EA%B5%AD%ED%88%AC%EC%9E%90%EC%A6%9D%EA%B6%8C&sm=mtb_opt&nso=so%3Add%2Cp%3Aall"
+
+logs = []
+def log(msg):
+    line = f"[TEST] {msg}"
+    print(line)
+    logs.append(line)
+
+def send_result_email():
+    now_str = datetime.now(KST).strftime("%Y.%m.%d %H:%M")
+    body = "\n".join(logs)
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"[블로그 검색 검증] 결과 | {now_str} KST"
+    msg["From"] = f"블로그검증봇 <{GMAIL_USER}>"
+    msg["To"] = GMAIL_USER
+    msg.attach(MIMEText(f"<pre>{body}</pre>", "html", "utf-8"))
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
+        s.login(GMAIL_USER, GMAIL_APP_PW)
+        s.sendmail(GMAIL_USER, GMAIL_USER, msg.as_string())
+    print("결과 메일 발송 완료")
+
+def main():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(
+            user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15"
+        )
+
+        log(f"검색 URL 접근: {SEARCH_URL[:80]}")
+        try:
+            page.goto(SEARCH_URL, wait_until="domcontentloaded", timeout=20000)
+            log(f"✅ 로드 성공 - 최종 URL: {page.url[:100]}")
+        except Exception as e:
+            log(f"❌ 로드 실패: {e}")
+            browser.close()
+            send_result_email()
+            return
+
+        page.wait_for_timeout(3000)
+
+        # 후보 셀렉터들로 검색 결과 리스트 탐색
+        candidate_selectors = [
+            "li.bx",
+            ".lst_type",
+            "ul.list_news li",
+            ".api_subject_bx li",
+            "div.total_wrap",
+            "a.title_link",
+            ".news_area",
+        ]
+
+        for sel in candidate_selectors:
+            items = page.query_selector_all(sel)
+            log(f"셀렉터 '{sel}' → {len(items)}건 매칭")
+
+        # 가장 유력한 후보로 실제 데이터 추출 시도
+        log("\n--- 상세 추출 시도 ---")
+        links = page.query_selector_all("a")
+        blog_links = []
+        for a in links:
+            href = a.get_attribute("href") or ""
+            if "blog.naver.com" in href and href not in blog_links:
+                blog_links.append(href)
+
+        log(f"blog.naver.com 링크 총 {len(blog_links)}개 발견")
+        for l in blog_links[:10]:
+            log(f"  {l}")
+
+        # 타이틀 텍스트 후보 추출
+        log("\n--- 제목 텍스트 후보 ---")
+        title_candidates = page.query_selector_all(".title_link, .api_txt_lines, strong, .name")
+        for i, el in enumerate(title_candidates[:15]):
+            try:
+                text = el.inner_text().strip()
+                if text and len(text) > 5:
+                    log(f"  [{i}] {text[:60]}")
+            except Exception:
+                pass
+
+        # 전체 HTML 일부 덤프 (구조 파악용, 검색결과 영역만)
+        log("\n--- HTML 구조 일부 ---")
+        html = page.content()
+        log(f"전체 HTML 길이: {len(html)}자")
+        # api_subject_bx 또는 lst_total 영역 찾기
+        import re
+        m = re.search(r'<ul[^>]*class="[^"]*(?:lst_total|api_subject_bx)[^"]*"[^>]*>(.{0,800})', html, re.S)
+        if m:
+            log(f"결과 리스트 영역 HTML 일부:\n{m.group(1)[:800]}")
+        else:
+            log("⚠️ lst_total/api_subject_bx 패턴 미발견")
+
+        log("\n=== 테스트 완료 ===")
+        browser.close()
+    send_result_email()
+
+if __name__ == "__main__":
+    main()
