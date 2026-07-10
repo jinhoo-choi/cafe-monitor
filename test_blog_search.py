@@ -106,6 +106,26 @@ def main():
 
         log(f"\n실제 게시글 URL(postId 포함) 고유 개수: {post_count}")
 
+        # 개별 포스트 페이지에서 작성일시 요소 확인
+        log("\n--- 개별 포스트 페이지 날짜 요소 확인 ---")
+        test_post_url = "https://m.blog.naver.com/lfg79/224341880031"
+        page.goto(test_post_url, wait_until="domcontentloaded", timeout=20000)
+        page.wait_for_timeout(2000)
+        date_selectors = [
+            ".se_publishDate", ".date", ".blog_date", "span.se_date",
+            ".se-title-text + span", "time", "[class*='date']", "[class*='Date']",
+        ]
+        for sel in date_selectors:
+            els = page.query_selector_all(sel)
+            if els:
+                for el in els[:2]:
+                    try:
+                        text = el.inner_text().strip()
+                        if text:
+                            log(f"  셀렉터 '{sel}' → '{text}'")
+                    except Exception:
+                        pass
+
         # li.bx 첫 3개의 실제 innerHTML 구조 덤프 (정밀 셀렉터 확보용)
         log("\n--- li.bx innerHTML 구조 (첫 3개) ---")
         bx_items = page.query_selector_all("li.bx")
