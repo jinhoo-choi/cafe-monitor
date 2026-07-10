@@ -23,4 +23,7 @@ jobs:
           playwright install-deps chromium
 
       - name: 블로그 접근 테스트
+        env:
+          GMAIL_USER:   ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PW: ${{ secrets.GMAIL_APP_PW }}
         run: python test_blog_fetch.py
