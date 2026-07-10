@@ -106,6 +106,18 @@ def main():
 
         log(f"\n실제 게시글 URL(postId 포함) 고유 개수: {post_count}")
 
+        # li.bx 첫 3개의 실제 innerHTML 구조 덤프 (정밀 셀렉터 확보용)
+        log("\n--- li.bx innerHTML 구조 (첫 3개) ---")
+        bx_items = page.query_selector_all("li.bx")
+        for i, item in enumerate(bx_items[:3]):
+            try:
+                html = item.evaluate("el => el.outerHTML")
+                # 너무 길면 자르기
+                log(f"\n  [li.bx #{i}] HTML ({len(html)}자):")
+                log(html[:1500])
+            except Exception as e:
+                log(f"  오류: {e}")
+
         # 전체 HTML 일부 덤프 (구조 파악용, 검색결과 영역만)
         log("\n--- HTML 구조 일부 ---")
         html = page.content()
