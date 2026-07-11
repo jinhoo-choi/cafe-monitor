@@ -73,7 +73,7 @@ TIME_WINDOW = 24   # 탐지 범위 (시간) - 24시간 기준, 일 1회 발송
 # 4~6 : 명확한 불만·비판·피해 호소
 # 7~10: 강한 비판·확산 가능성 높음
 # ※ SCORE_THRESHOLD 이상인 경우만 담당자 알림 발송
-SCORE_THRESHOLD = 1   # 부정 강도 이 값 이상인 경우만 알림 발송
+SCORE_THRESHOLD = 2   # 부정 강도 이 값 이상인 경우만 알림 발송
 MAX_ALERTS     = 30   # 이메일 발송 최대 건수 제한
 
 NEGATIVE_HINTS = [   # AI 호출 전 룰필터 - 하나라도 있으면 Claude 분석 진행
@@ -115,6 +115,33 @@ AD_SKIP_PATTERNS = [
 ]
 
 KST = timezone(timedelta(hours=9))
+
+# ─────────────────────────────────────────
+# 네이버 블로그 전용 설정
+# ─────────────────────────────────────────
+BLOG_BODY_SELECTORS = [
+    ".se-main-container",
+    "#postViewArea",
+    ".post_ct",
+    ".se-component-content",
+]
+BLOG_TITLE_SELECTORS = [
+    ".se-title-text",
+    ".htitle",
+    "h3.se_textarea",
+]
+BLOG_DATE_SELECTORS = [
+    ".blog_date",
+    "[class*='date']",
+]
+# 블로그 특화 광고/노이즈 패턴 (기존 AD_SKIP_PATTERNS에 추가로 적용)
+BLOG_AD_SKIP_PATTERNS = [
+    "협찬", "체험단", "제공받아", "원고료", "유료광고", "유료 광고",
+    "재무설계 상담", "무료 상담 신청", "1:1 상담 신청",
+    "TOP10", "TOP5", "완벽정리", "총정리",
+]
+# 게시글 URL에서 postId 추출 (블로거 프로필 링크와 실제 글 링크 구분용)
+BLOG_POST_ID_PATTERN = re.compile(r'/(\d{6,})(\?|$)')
 
 # ─────────────────────────────────────────
 # 로그 유틸
@@ -396,7 +423,116 @@ def get_post_list(page, cafe_id, num_id):
     return posts
 
 # ─────────────────────────────────────────
+# 네이버 블로그 검색 - 게시글 URL 목록 수집
+# ─────────────────────────────────────────
+
+def search_naver_blog(page, keyword):
+    """네이버 모바일 블로그 검색 - 최신순 정렬, 게시글 URL만 추출
+    검색 결과 카드 템플릿이 최소 2종류 혼재되어 제목·본문을 리스트에서
+    파싱하지 않고 URL만 뽑아서 get_blog_detail()로 개별 페이지에서 수집한다.
+    로그인 불필요 (공개 검색 페이지).
+    """
+    encoded = urllib.parse.quote(keyword)
+    url = f"https://m.search.naver.com/search.naver?where=m_blog&query={encoded}&sm=mtb_opt&nso=so%3Add%2Cp%3Aall"
+
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=20000)
+    except Exception as e:
+        log(f"  블로그 검색 페이지 로드 실패, 재시도: {e}")
+        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+
+    page.wait_for_timeout(random.randint(2000, 3500))
+    log(f"  블로그 검색: [{keyword}] → {url[:80]}")
+
+    anchors = page.query_selector_all("a[href*='blog.naver.com']")
+    seen_urls = set()
+    post_urls = []
+    for a in anchors:
+        href = a.get_attribute("href") or ""
+        m = BLOG_POST_ID_PATTERN.search(href)
+        if not m:
+            continue  # 블로거 프로필 링크 등 postId 없는 링크 제외
+        clean_url = href.split("?")[0]
+        if clean_url in seen_urls:
+            continue
+        seen_urls.add(clean_url)
+        post_urls.append({"url": clean_url, "post_id": m.group(1), "keyword": keyword})
+
+    log(f"  블로그 검색 결과 {len(post_urls)}건 (고유 URL)")
+    return post_urls
+
+
+def get_blog_post_list(page, keywords):
+    """키워드별 블로그 검색 결과 통합 (카페의 get_post_list와 동일 패턴)"""
+    all_posts = {}
+    for keyword in keywords:
+        results = search_naver_blog(page, keyword)
+        for p in results:
+            pid = p["post_id"]
+            if pid not in all_posts:
+                all_posts[pid] = p
+            else:
+                existing_kw = all_posts[pid].get("keyword", "")
+                if keyword not in existing_kw:
+                    all_posts[pid]["keyword"] = existing_kw + ", " + keyword
+    posts = list(all_posts.values())
+    log(f"블로그 키워드 검색 완료: {len(posts)}건 수집 (중복 제거)")
+    return posts
+
+
+def get_blog_detail(page, post_url):
+    """블로그 개별 포스트에서 제목/본문/날짜 수집 (로그인 불필요, iframe 없음)
+    반환: {"title": str, "body": str, "date_str": str}
+    """
+    result = {"title": "", "body": "", "date_str": ""}
+    try:
+        page.goto(post_url, wait_until="domcontentloaded", timeout=15000)
+        page.wait_for_timeout(random.randint(1500, 2500))
+    except Exception as e:
+        log(f"  블로그 본문 페이지 로드 실패: {e}")
+        return result
+
+    for sel in BLOG_TITLE_SELECTORS:
+        try:
+            el = page.query_selector(sel)
+            if el:
+                text = el.inner_text().strip()
+                if text:
+                    result["title"] = text
+                    break
+        except Exception:
+            continue
+
+    for sel in BLOG_BODY_SELECTORS:
+        try:
+            el = page.query_selector(sel)
+            if el:
+                text = el.inner_text().strip()
+                if text:
+                    result["body"] = text[:2000]
+                    break
+        except Exception:
+            continue
+
+    for sel in BLOG_DATE_SELECTORS:
+        try:
+            el = page.query_selector(sel)
+            if el:
+                text = el.inner_text().strip()
+                if text:
+                    result["date_str"] = text
+                    break
+        except Exception:
+            continue
+
+    if not result["body"]:
+        log(f"  블로그 본문 비어 있음: {post_url}")
+
+    return result
+
+# ─────────────────────────────────────────
 # 게시글 본문 수집
+
 # ─────────────────────────────────────────
 
 def get_post_detail(page, post_url, cafe_id):
@@ -615,6 +751,15 @@ def build_card(post, idx, total):
     summary  = html.escape(post["summary"])
     reply    = html.escape(post.get("reply", ""))
 
+    # 소스 배지 (카페/블로그 시각적 구분)
+    source = post.get("source", "cafe")
+    if source == "blog":
+        badge_html = ('<td style="background:#e3f2fd;color:#1565c0;font-size:10px;'
+                      'font-weight:bold;padding:3px 8px;border-radius:3px;">📝 블로그</td>')
+    else:
+        badge_html = ('<td style="background:#fdecea;color:#c62828;font-size:10px;'
+                      'font-weight:bold;padding:3px 8px;border-radius:3px;">💬 카페</td>')
+
     related_posts = post.get("related_posts", [])
     common_kws    = post.get("common_keywords", [])
     if related_posts:
@@ -656,8 +801,13 @@ def build_card(post, idx, total):
       <tr>
         <td style="padding:20px 28px;">
 
-          <p style="margin:0 0 8px 0;font-size:10px;font-weight:bold;
-                    color:#c62828;letter-spacing:0.6px;">게시글 {idx} / {total} &nbsp;·&nbsp; {post.get('cafe_name','')}</p>
+          <table cellpadding="0" cellspacing="0" border="0" style="margin-bottom:8px;">
+            <tr>
+              {badge_html}
+              <td style="padding-left:8px;font-size:10px;font-weight:bold;
+                    color:#c62828;letter-spacing:0.6px;">게시글 {idx} / {total} &nbsp;·&nbsp; {post.get('cafe_name','')}</td>
+            </tr>
+          </table>
 
           <table cellpadding="0" cellspacing="0" border="0" style="margin-bottom:10px;">
             <tr>
@@ -801,7 +951,14 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count, unresolved_posts
     if total > 0:
         subject      = f"⚠️[부정여론 탐지] {now_kst.strftime('%m')}월 {now_kst.strftime('%d')}일 {now_kst.strftime('%H')}시 기준"
         banner_badge = f"AI 부정여론 탐지 · {total}건"
-        banner_title = f"네이버 카페 부정 언급 {total}건 탐지"
+        blog_count = sum(1 for p in alert_posts if p.get("source") == "blog")
+        cafe_count = total - blog_count
+        if blog_count and cafe_count:
+            banner_title = f"부정 언급 {total}건 탐지 (카페 {cafe_count} · 블로그 {blog_count})"
+        elif blog_count:
+            banner_title = f"네이버 블로그 부정 언급 {total}건 탐지"
+        else:
+            banner_title = f"네이버 카페 부정 언급 {total}건 탐지"
     else:
         subject      = f"[부정여론 탐지] {now_kst.strftime('%m')}월 {now_kst.strftime('%d')}일 {now_kst.strftime('%H')}시 기준 | 확인필요"
         banner_badge = f"확인필요 · 본문 미수집 {len(unresolved_posts)}건"
@@ -1057,6 +1214,7 @@ def main():
                             # 본문 미수집 + 부정힌트 없음 → 확인필요 섹션에 적재
                             if not body:
                                 post["cafe_name"]  = cafe_name
+                                post["source"]     = "cafe"
                                 post["matched_kw"] = matched
                                 unresolved_posts.append(post)
                                 mark_seen(f"{cafe_id}:{post['post_id']}")
@@ -1079,6 +1237,7 @@ def main():
                         log(f"AI 결과 - 부정:{result['is_negative']} | 강도:{result['score']}/10")
 
                         post["cafe_name"]  = cafe_name
+                        post["source"]     = "cafe"
                         post["matched_kw"] = matched
                         post["score"]      = result["score"]
                         post["summary"]    = result["summary"]
@@ -1093,6 +1252,76 @@ def main():
                     except Exception:
                         pass
                     continue
+
+            # ── 네이버 블로그 섹션 (카페와 동일 page/context 재사용, 로그인 불필요) ──
+            log(f"\n── 네이버 블로그 ──")
+            try:
+                blog_posts = get_blog_post_list(page, KEYWORDS)
+                new_blog_posts = [p for p in blog_posts if is_new(f"blog:{p['post_id']}")]
+                log(f"블로그 신규 게시글: {len(new_blog_posts)}건")
+                total_crawled += len(new_blog_posts)
+                cutoff = datetime.now(KST) - timedelta(hours=TIME_WINDOW)
+
+                for post in new_blog_posts:
+                    matched = post.get("keyword", "").split(",")[0].strip()
+                    total_keywords += 1
+                    log(f"블로그 키워드 [{matched}] 탐지: {post['url'][:60]}...")
+
+                    detail = get_blog_detail(page, post["url"])
+                    title, body, date_str = detail["title"], detail["body"], detail["date_str"]
+
+                    if not title:
+                        # 제목조차 못 가져오면 스킵 (삭제/비공개 게시글 가능성)
+                        mark_seen(f"blog:{post['post_id']}")
+                        continue
+
+                    post_time = parse_date(date_str) if date_str else datetime.now(KST)
+                    if post_time < cutoff:
+                        mark_seen(f"blog:{post['post_id']}")
+                        continue
+
+                    combined_text = (title + " " + body).lower()
+                    has_hint = any(hint in combined_text for hint in NEGATIVE_HINTS)
+
+                    if not has_hint:
+                        if not body:
+                            post["cafe_name"]  = "네이버 블로그"
+                            post["source"]     = "blog"
+                            post["title"]      = title
+                            post["matched_kw"] = matched
+                            post["post_time"]  = post_time
+                            unresolved_posts.append(post)
+                            log(f"  본문 미수집 - 확인필요 목록 추가")
+                        else:
+                            log(f"  룰필터 통과 - AI 분석 생략 (부정 힌트 없음)")
+                        mark_seen(f"blog:{post['post_id']}")
+                        continue
+
+                    # 블로그 특화 광고 패턴 + 기존 광고 패턴 모두 체크
+                    is_ad = any(pat in title for pat in AD_SKIP_PATTERNS + BLOG_AD_SKIP_PATTERNS)
+                    if is_ad:
+                        log(f"  광고성 게시글 제외: {title[:40]}")
+                        mark_seen(f"blog:{post['post_id']}")
+                        continue
+
+                    result = analyze_sentiment(title, body, matched)
+                    if result["summary"] != "분석 실패":
+                        mark_seen(f"blog:{post['post_id']}")
+                    log(f"AI 결과 - 부정:{result['is_negative']} | 강도:{result['score']}/10")
+
+                    post["cafe_name"]  = "네이버 블로그"
+                    post["source"]     = "blog"
+                    post["title"]      = title
+                    post["matched_kw"] = matched
+                    post["score"]      = result["score"]
+                    post["summary"]    = result["summary"]
+                    post["reply"]      = result.get("reply", "")
+                    post["post_time"]  = post_time
+                    if result["score"] >= SCORE_THRESHOLD:
+                        all_alerts.append(post)
+
+            except Exception as blog_err:
+                log(f"  ⚠️ [블로그] 오류 - 계속 진행: {blog_err}")
 
             context.close()
             browser.close()
@@ -1137,5 +1366,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
