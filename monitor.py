@@ -1207,6 +1207,17 @@ def main():
                         # 본문 수집
                         body = get_post_detail(page, post["url"], cafe_id)
 
+                        # 키워드 실존 검증: 카페 검색은 본문+댓글 통합검색(ta=ARTICLE_COMMENT)이라
+                        # 댓글에서만 키워드가 매칭된 글도 결과에 포함될 수 있음.
+                        # get_post_detail()은 본문만 가져오므로, 본문에 키워드가 전혀 없으면
+                        # (=댓글 매칭 추정) AI 분석 없이 스킵해 오탐 방지
+                        if body:
+                            title_body_check = (post["title"] + " " + body)
+                            if not any(kw in title_body_check for kw in KEYWORDS):
+                                log(f"  키워드 미확인 - 댓글 매칭 추정(본문에 없음), AI 분석 생략")
+                                mark_seen(f"{cafe_id}:{post['post_id']}")
+                                continue
+
                         # AI 호출 전 룰필터 ①: 부정 힌트 없으면 Claude 미호출
                         combined_text = (post["title"] + " " + body).lower()
                         has_hint = any(hint in combined_text for hint in NEGATIVE_HINTS)
@@ -1280,6 +1291,14 @@ def main():
                     if post_time < cutoff:
                         mark_seen(f"blog:{post['post_id']}")
                         continue
+
+                    # 키워드 실존 검증 (카페와 동일 안전장치) - 본문에 키워드가 전혀 없으면 스킵
+                    if body:
+                        title_body_check = title + " " + body
+                        if not any(kw in title_body_check for kw in KEYWORDS):
+                            log(f"  키워드 미확인(본문에 없음), AI 분석 생략")
+                            mark_seen(f"blog:{post['post_id']}")
+                            continue
 
                     combined_text = (title + " " + body).lower()
                     has_hint = any(hint in combined_text for hint in NEGATIVE_HINTS)
@@ -1369,6 +1388,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
