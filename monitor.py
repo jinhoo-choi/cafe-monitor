@@ -482,9 +482,11 @@ def get_blog_post_list(page, keywords):
 
 def get_blog_detail(page, post_url):
     """블로그 개별 포스트에서 제목/본문/날짜 수집 (로그인 불필요, iframe 없음)
-    반환: {"title": str, "body": str, "date_str": str}
+    반환: {"title": str, "body": str, "body_full": str, "date_str": str}
+    - body: AI 분석용 (2000자 제한, 비용 절약)
+    - body_full: 키워드 실존 검증용 (전체 본문 - 키워드가 후반부에 있어도 탐지)
     """
-    result = {"title": "", "body": "", "date_str": ""}
+    result = {"title": "", "body": "", "body_full": "", "date_str": ""}
     try:
         page.goto(post_url, wait_until="domcontentloaded", timeout=15000)
         page.wait_for_timeout(random.randint(1500, 2500))
@@ -509,7 +511,8 @@ def get_blog_detail(page, post_url):
             if el:
                 text = el.inner_text().strip()
                 if text:
-                    result["body"] = text[:2000]
+                    result["body_full"] = text          # 검증용 전체
+                    result["body"] = text[:2000]        # AI 분석용
                     break
         except Exception:
             continue
@@ -536,7 +539,10 @@ def get_blog_detail(page, post_url):
 # ─────────────────────────────────────────
 
 def get_post_detail(page, post_url, cafe_id):
-    """본문 텍스트 반환 - f-e URL로 접근 후 iframe에서 본문 파싱"""
+    """본문 텍스트 반환 - f-e URL로 접근 후 iframe에서 본문 파싱
+    반환: (body_2000, body_full) 튜플
+    - body_2000: AI 분석용 (2000자 제한)
+    - body_full: 키워드 실존 검증용 (전체 본문)"""
     BODY_SELECTORS = [
         ".se-main-container",
         ".ArticleContentBox",
@@ -553,7 +559,7 @@ def get_post_detail(page, post_url, cafe_id):
     except Exception as e:
         log(f"  본문 페이지 로드 실패 (제목만으로 분석 진행): {e}")
         page.wait_for_timeout(1000)
-        return ""
+        return "", ""
 
     try:
         page.wait_for_selector(SELECTOR_COMBINED, timeout=8000)
@@ -571,7 +577,7 @@ def get_post_detail(page, post_url, cafe_id):
                     try:
                         el = frame.query_selector(sel)
                         if el:
-                            body = el.inner_text().strip()[:2000]
+                            body = el.inner_text().strip()
                             if body:
                                 break
                     except Exception:
@@ -597,7 +603,7 @@ def get_post_detail(page, post_url, cafe_id):
                         try:
                             el = frame.query_selector(sel)
                             if el:
-                                body = el.inner_text().strip()[:2000]
+                                body = el.inner_text().strip()
                                 if body:
                                     break
                         except Exception:
@@ -619,7 +625,7 @@ def get_post_detail(page, post_url, cafe_id):
                     try:
                         el = frame.query_selector(sel)
                         if el:
-                            candidate = el.inner_text().strip()[:2000]
+                            candidate = el.inner_text().strip()
                             if candidate:
                                 body = candidate
                                 break
@@ -637,7 +643,7 @@ def get_post_detail(page, post_url, cafe_id):
             for sel in BODY_SELECTORS:
                 el = page.query_selector(sel)
                 if el:
-                    body = el.inner_text().strip()[:2000]
+                    body = el.inner_text().strip()
                     if body:
                         log(f"  직접 파싱 본문 수집 성공")
                         break
@@ -647,7 +653,7 @@ def get_post_detail(page, post_url, cafe_id):
     if not body:
         log("  본문 비어 있음 - 제목만으로 AI 분석 진행")
 
-    return body
+    return body[:2000], body
 
 def analyze_sentiment(title, body, keyword):
     prompt = f"""다음은 네이버 카페 게시글입니다.
@@ -1204,15 +1210,14 @@ def main():
                         total_keywords += 1
                         log(f"키워드 [{matched}] 탐지: {post['title'][:40]}...")
 
-                        # 본문 수집
-                        body = get_post_detail(page, post["url"], cafe_id)
+                        # 본문 수집 (body: AI 분석용 2000자, body_full: 검증용 전체)
+                        body, body_full = get_post_detail(page, post["url"], cafe_id)
 
                         # 키워드 실존 검증: 카페 검색은 본문+댓글 통합검색(ta=ARTICLE_COMMENT)이라
                         # 댓글에서만 키워드가 매칭된 글도 결과에 포함될 수 있음.
-                        # get_post_detail()은 본문만 가져오므로, 본문에 키워드가 전혀 없으면
-                        # (=댓글 매칭 추정) AI 분석 없이 스킵해 오탐 방지
-                        if body:
-                            title_body_check = (post["title"] + " " + body)
+                        # 전체 본문(body_full) 기준으로 검증해 긴 글 후반부 언급도 정확히 탐지
+                        if body_full:
+                            title_body_check = (post["title"] + " " + body_full)
                             if not any(kw in title_body_check for kw in KEYWORDS):
                                 log(f"  키워드 미확인 - 댓글 매칭 추정(본문에 없음), AI 분석 생략")
                                 mark_seen(f"{cafe_id}:{post['post_id']}")
@@ -1281,6 +1286,7 @@ def main():
 
                     detail = get_blog_detail(page, post["url"])
                     title, body, date_str = detail["title"], detail["body"], detail["date_str"]
+                    body_full = detail.get("body_full", body)
 
                     if not title:
                         # 제목조차 못 가져오면 스킵 (삭제/비공개 게시글 가능성)
@@ -1292,9 +1298,10 @@ def main():
                         mark_seen(f"blog:{post['post_id']}")
                         continue
 
-                    # 키워드 실존 검증 (카페와 동일 안전장치) - 본문에 키워드가 전혀 없으면 스킵
-                    if body:
-                        title_body_check = title + " " + body
+                    # 키워드 실존 검증 (카페와 동일 안전장치)
+                    # 전체 본문(body_full) 기준 - 긴 글 후반부 언급도 정확히 탐지
+                    if body_full:
+                        title_body_check = title + " " + body_full
                         if not any(kw in title_body_check for kw in KEYWORDS):
                             log(f"  키워드 미확인(본문에 없음), AI 분석 생략")
                             mark_seen(f"blog:{post['post_id']}")
@@ -1388,6 +1395,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
