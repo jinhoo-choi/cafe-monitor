@@ -48,22 +48,49 @@ def main():
 
             log(f"접근: {POST_URL}")
             page.goto(POST_URL, wait_until="domcontentloaded", timeout=20000)
-            page.wait_for_timeout(3000)
+
+            SELECTOR_COMBINED = ".se-main-container, .ArticleContentBox, .article-viewer, .ContentRenderer, #tbody, .article_body, .se-component-content"
+            try:
+                page.wait_for_selector(SELECTOR_COMBINED, timeout=8000)
+            except Exception:
+                page.wait_for_timeout(2500)
+
+            all_frames = [(f.url or "") for f in page.frames]
+            log(f"page.url: {page.url}")
+            log(f"프레임 {len(all_frames)}개: {all_frames}")
 
             # 본문 찾기 (iframe 구조)
             body_text = ""
             for frame in page.frames:
                 frame_url = frame.url or ""
                 if "naver.com" in frame_url and frame_url != page.url and frame_url != "about:blank":
-                    for sel in [".se-main-container", ".ArticleContentBox", "#tbody"]:
-                        el = frame.query_selector(sel)
-                        if el:
-                            body_text = el.inner_text().strip()
-                            if body_text:
-                                log(f"본문 프레임: {frame_url[:70]}")
-                                break
+                    for sel in [".se-main-container", ".ArticleContentBox", "#tbody", ".article_body"]:
+                        try:
+                            el = frame.query_selector(sel)
+                            if el:
+                                text = el.inner_text().strip()
+                                if text:
+                                    body_text = text
+                                    log(f"본문 프레임: {frame_url[:70]} (셀렉터={sel})")
+                                    break
+                        except Exception:
+                            continue
                     if body_text:
                         break
+
+            # fallback: 메인 페이지 직접
+            if not body_text:
+                for sel in [".se-main-container", ".ArticleContentBox", "#tbody", ".article_body"]:
+                    try:
+                        el = page.query_selector(sel)
+                        if el:
+                            text = el.inner_text().strip()
+                            if text:
+                                body_text = text
+                                log(f"본문 메인페이지 직접(셀렉터={sel})")
+                                break
+                    except Exception:
+                        continue
 
             log(f"\n=== 본문 전체 ({len(body_text)}자) ===")
             log(body_text)
@@ -73,20 +100,33 @@ def main():
             for kw in keywords:
                 log(f"  '{kw}' in 본문: {kw in body_text}")
 
+            # 로그인 상태 확인 (실제 monitor.py와 동일하게)
+            login_ok = False
+            for frame in page.frames:
+                try:
+                    if frame.query_selector("a[href*='Logout']") or "profile" in (frame.url or ""):
+                        login_ok = True
+                except Exception:
+                    pass
+            log(f"로그인 상태(추정): {'확인됨' if login_ok else '불명 - 쿠키 만료 가능성 있음'}")
+
             # 댓글 찾기
             log(f"\n=== 댓글 수집 시도 ===")
             comment_text = ""
+            comment_selectors = [
+                ".comment_area", "[class*='CommentItem']", "[class*='comment_text']",
+                ".comment_list", "ul.comment_list", "[class*='Comment']",
+            ]
             for frame in page.frames:
                 frame_url = frame.url or ""
                 if "naver.com" in frame_url and frame_url != page.url and frame_url != "about:blank":
-                    for sel in [".comment_area", "#app > div > div > div.CommentBox",
-                                "[class*='Comment']", ".comment_list", "ul.comment_list"]:
+                    for sel in comment_selectors:
                         try:
                             els = frame.query_selector_all(sel)
                             for el in els:
                                 t = el.inner_text().strip()
                                 if t:
-                                    comment_text += t + "\n"
+                                    comment_text += t + "\n---\n"
                         except Exception:
                             continue
 
