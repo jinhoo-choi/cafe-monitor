@@ -45,20 +45,23 @@ COOKIE_FILE = "naver_cookies.json"
 # ─────────────────────────────────────────
 
 CAFES = [
-    {"id": "likeusstock", "num_id": "28497937", "name": "미국주식이 미래다"},
-    {"id": "vilab",       "num_id": "11525920", "name": "가치투자연구소"},
-    {"id": "yamizal",     "num_id": "30676048", "name": "미국 주식에 미치다"},
-    {"id": "geobuk2",     "num_id": "26251287", "name": "거북이 투자법"},
-    {"id": "ustock",      "num_id": "15112066", "name": "평생주식카페"},
-    {"id": "onepieceholicplus", "num_id": "22290117", "name": "월급쟁이 재테크 연구카페"},
-    {"id": "pointns",          "num_id": "25873056", "name": "주식투자는 달팽이처럼"},
-    {"id": "wjdrkrjqn",        "num_id": "30786704", "name": "정가를 거부하는 사람들"},
-    {"id": "stocktraining",    "num_id": "29798500", "name": "나는 주식트레이더다"},
-    {"id": "dlxogns01",        "num_id": "23676262", "name": "배당 투자자 모임"},
-    {"id": "engmstudy",        "num_id": "14028420", "name": "짠돌이카페"},
-    {"id": "hayate1",          "num_id": "11560463", "name": "주식광장"},
-    {"id": "divclub",          "num_id": "31050378", "name": "은퇴후 50년"},
-    {"id": "moneyinsights",    "num_id": "31449216", "name": "돈이 되는 모든 정보"},
+    # login_required: 2026-07-13 비로그인 실검증 결과 기반
+    #   True  = 회원 전용 열람 카페 (비로그인 시 본문 0자 확인됨)
+    #   False = 비로그인 열람 가능 확인됨
+    {"id": "likeusstock", "num_id": "28497937", "name": "미국주식이 미래다", "login_required": True},   # 미측정(검색0건) - 안전하게 True
+    {"id": "vilab",       "num_id": "11525920", "name": "가치투자연구소", "login_required": True},
+    {"id": "yamizal",     "num_id": "30676048", "name": "미국 주식에 미치다", "login_required": True},  # 판정유보 - 안전하게 True
+    {"id": "geobuk2",     "num_id": "26251287", "name": "거북이 투자법", "login_required": True},
+    {"id": "ustock",      "num_id": "15112066", "name": "평생주식카페", "login_required": False},
+    {"id": "onepieceholicplus", "num_id": "22290117", "name": "월급쟁이 재테크 연구카페", "login_required": True},
+    {"id": "pointns",          "num_id": "25873056", "name": "주식투자는 달팽이처럼", "login_required": True},
+    {"id": "wjdrkrjqn",        "num_id": "30786704", "name": "정가를 거부하는 사람들", "login_required": False},
+    {"id": "stocktraining",    "num_id": "29798500", "name": "나는 주식트레이더다", "login_required": True},
+    {"id": "dlxogns01",        "num_id": "23676262", "name": "배당 투자자 모임", "login_required": False},
+    {"id": "engmstudy",        "num_id": "14028420", "name": "짠돌이카페", "login_required": False},
+    {"id": "hayate1",          "num_id": "11560463", "name": "주식광장", "login_required": False},
+    {"id": "divclub",          "num_id": "31050378", "name": "은퇴후 50년", "login_required": True},
+    {"id": "moneyinsights",    "num_id": "31449216", "name": "돈이 되는 모든 정보", "login_required": False},
 ]
 
 KEYWORDS    = ["한국투자증권", "한투", "뱅키스"]
@@ -1141,51 +1144,80 @@ def main():
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
 
+            # ── 쿠키 상태 확인 → cookie_valid 플래그로 우아한 성능저하 ──
+            # 쿠키 만료/부재 시 전체 중단 대신: 로그인 필요 카페만 건너뛰고
+            # 비로그인 가능 카페 + 블로그는 정상 모니터링 지속
+            cookie_valid = True
+
             if not os.path.exists(COOKIE_FILE):
-                raise RuntimeError("naver_cookies.json 없음 - NAVER_COOKIES_JSON Secret 확인 필요")
+                cookie_valid = False
+                log("⚠️ naver_cookies.json 없음 - 비로그인 모드로 진행 (로그인 필요 카페 건너뜀)")
+            else:
+                log("쿠키 파일로 접속")
+                # 쿠키 만료 사전 감지 (7일 이내 만료 예정 경고)
+                try:
+                    with open(COOKIE_FILE, "r", encoding="utf-8") as f:
+                        cookie_data = json.load(f)
+                    cookies = cookie_data.get("cookies", [])
+                    now_ts = datetime.now(KST).timestamp()
+                    expiring_soon = []
+                    for c in cookies:
+                        exp = c.get("expires", -1)
+                        # now_ts < exp: 아직 유효한 쿠키 중에서
+                        # exp < now_ts + 7일: 7일 이내 만료 예정인 것만 경고 (갱신 여유 확보)
+                        # (이미 만료된 쿠키는 크롤링에 영향 없으므로 제외)
+                        if now_ts < exp < now_ts + (7 * 24 * 3600):
+                            expiring_soon.append(c.get("name", "unknown"))
+                    if expiring_soon:
+                        send_status_email("warning",
+                            detail=f"쿠키 만료 임박 (7일 이내): {', '.join(expiring_soon)}\n"
+                                   f"NAVER_COOKIES_JSON Secret 재등록을 준비해주세요.")
+                        log(f"⚠️ 쿠키 만료 임박: {expiring_soon}")
+                except Exception as e:
+                    log(f"쿠키 만료 확인 중 오류: {e}")
 
-            log("쿠키 파일로 접속")
+            # context 생성: 쿠키가 있으면 로그인 상태로, 없으면 비로그인으로
+            if cookie_valid:
+                context = browser.new_context(storage_state=COOKIE_FILE)
+            else:
+                context = browser.new_context()
+            page = context.new_page()
 
-            # 쿠키 만료 사전 감지
-            try:
-                with open(COOKIE_FILE, "r", encoding="utf-8") as f:
-                    cookie_data = json.load(f)
-                cookies = cookie_data.get("cookies", [])
-                now_ts = datetime.now(KST).timestamp()
-                expiring_soon = []
-                for c in cookies:
-                    exp = c.get("expires", -1)
-                    # now_ts < exp: 아직 유효한 쿠키 중에서
-                    # exp < now_ts + 3일: 3일 이내 만료 예정인 것만 경고
-                    # (이미 만료된 쿠키는 크롤링에 영향 없으므로 제외)
-                    if now_ts < exp < now_ts + (3 * 24 * 3600):
-                        expiring_soon.append(c.get("name", "unknown"))
-                if expiring_soon:
+            # 로그인 상태 확인 (쿠키가 있을 때만) - 만료 확인 시 전체 중단 대신 비로그인 모드 전환
+            if cookie_valid:
+                page.goto("https://www.naver.com", wait_until="domcontentloaded")
+                page.wait_for_timeout(2000)
+                if "nid.naver.com" in page.url:
+                    cookie_valid = False
+                    log("⚠️ 쿠키 만료 확인 - 비로그인 모드로 전환 (로그인 필요 카페 건너뜀)")
                     send_status_email("warning",
-                        detail=f"쿠키 만료 임박 (3일 이내): {', '.join(expiring_soon)}\n"
-                               f"NAVER_COOKIES_JSON Secret 재등록을 준비해주세요.")
-                    log(f"⚠️ 쿠키 만료 임박: {expiring_soon}")
-            except Exception as e:
-                log(f"쿠키 만료 확인 중 오류: {e}")
-
-            context = browser.new_context(storage_state=COOKIE_FILE)
-            page    = context.new_page()
-
-            page.goto("https://www.naver.com", wait_until="domcontentloaded")
-            page.wait_for_timeout(2000)
-            if "nid.naver.com" in page.url:
-                raise RuntimeError("쿠키 만료 - NAVER_COOKIES_JSON Secret 재등록 필요")
-            log("로그인 상태 확인 완료")
+                        detail="쿠키가 만료되어 비로그인 모드로 실행합니다.\n"
+                               "로그인 필요 카페는 이번 실행에서 건너뜁니다.\n"
+                               "NAVER_COOKIES_JSON Secret을 재등록해주세요.")
+                    # 비로그인 컨텍스트로 재생성
+                    context.close()
+                    context = browser.new_context()
+                    page = context.new_page()
+                else:
+                    log("로그인 상태 확인 완료")
 
             total_crawled    = 0
             total_keywords   = 0
             all_alerts       = []
             unresolved_posts = []  # 본문 미수집으로 AI 분석 생략된 게시글
+            skipped_cafes    = []  # 쿠키 만료로 건너뛴 로그인 필요 카페
 
             for cafe in CAFES:
                 cafe_id   = cafe["id"]
                 num_id    = cafe["num_id"]
                 cafe_name = cafe["name"]
+
+                # 우아한 성능저하: 쿠키 무효 시 로그인 필요 카페는 건너뜀
+                if not cookie_valid and cafe.get("login_required", True):
+                    skipped_cafes.append(cafe_name)
+                    log(f"\n── {cafe_name} ({cafe_id}) ── 건너뜀 (쿠키 만료, 회원전용 카페)")
+                    continue
+
                 log(f"\n── {cafe_name} ({cafe_id}) ──")
 
                 try:
@@ -1355,6 +1387,8 @@ def main():
 
             # STEP 4: 결과에 따라 이메일 분기
             log(f"\n크롤링 {total_crawled}건 → 키워드 탐지 {total_keywords}건 → AI 필터링 {len(all_alerts)}건")
+            if skipped_cafes:
+                log(f"⚠️ 쿠키 만료로 건너뛴 카페 {len(skipped_cafes)}곳: {', '.join(skipped_cafes)}")
             if all_alerts:
                 all_alerts = sorted(all_alerts, key=lambda x: x.get("score", 0), reverse=True)
                 # 그룹핑 먼저 (같은 이슈를 다룬 여러 글을 1건으로 묶음)
@@ -1395,6 +1429,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
