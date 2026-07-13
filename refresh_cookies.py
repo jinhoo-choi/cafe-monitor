@@ -24,6 +24,7 @@ KST = timezone(timedelta(hours=9))
 GMAIL_USER    = os.environ["GMAIL_USER"]
 GMAIL_APP_PW  = os.environ["GMAIL_APP_PW"]
 NOTIFY_EMAIL  = os.environ["NOTIFY_EMAIL"]
+RECIPIENTS    = [r.strip() for r in NOTIFY_EMAIL.split(",") if r.strip()]
 NAVER_ID      = os.environ["NAVER_ID"]
 NAVER_PW      = os.environ["NAVER_PW"]
 ADMIN_TOKEN   = os.environ["ADMIN_GITHUB_TOKEN"]
@@ -42,11 +43,11 @@ def send_email(subject, body_html):
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"{subject} | {now_str} KST"
     msg["From"] = f"쿠키갱신봇 <{GMAIL_USER}>"
-    msg["To"] = NOTIFY_EMAIL
+    msg["To"] = ", ".join(RECIPIENTS)
     msg.attach(MIMEText(body_html, "html", "utf-8"))
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(GMAIL_USER, GMAIL_APP_PW)
-        s.sendmail(GMAIL_USER, NOTIFY_EMAIL, msg.as_string())
+        s.sendmail(GMAIL_USER, RECIPIENTS, msg.as_string())
 
 def encrypt_secret(pub_key_b64, secret_value):
     pub_key = public.PublicKey(pub_key_b64.encode(), encoding.Base64Encoder())
@@ -185,3 +186,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
