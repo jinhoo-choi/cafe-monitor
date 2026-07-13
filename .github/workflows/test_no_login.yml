@@ -6,17 +6,18 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - run: |
-          pip install playwright
+          pip install playwright requests
           playwright install chromium
           playwright install-deps chromium
       - env:
-          GMAIL_USER:   ${{ secrets.GMAIL_USER }}
-          GMAIL_APP_PW: ${{ secrets.GMAIL_APP_PW }}
-        run: python test_no_login_all.py
+          GMAIL_USER:         ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PW:       ${{ secrets.GMAIL_APP_PW }}
+          NAVER_COOKIES_JSON: ${{ secrets.NAVER_COOKIES_JSON }}
+        run: python test_no_login_v2.py
