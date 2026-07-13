@@ -7,7 +7,7 @@ on:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: 코드 체크아웃
         uses: actions/checkout@v4
@@ -32,3 +32,4 @@ jobs:
           NAVER_PW:           ${{ secrets.NAVER_PW }}
           ADMIN_GITHUB_TOKEN: ${{ secrets.ADMIN_GITHUB_TOKEN }}
         run: python refresh_cookies.py
+
