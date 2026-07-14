@@ -23,8 +23,8 @@ KST = timezone(timedelta(hours=9))
 
 GMAIL_USER    = os.environ["GMAIL_USER"]
 GMAIL_APP_PW  = os.environ["GMAIL_APP_PW"]
-NOTIFY_EMAIL  = os.environ["NOTIFY_EMAIL"]
-RECIPIENTS    = [r.strip() for r in NOTIFY_EMAIL.split(",") if r.strip()]
+# 쿠키 갱신은 내부 운영 이슈이므로 임원 리스트(NOTIFY_EMAIL)가 아닌 본인(GMAIL_USER)에게만 발송
+RECIPIENTS    = [GMAIL_USER]
 NAVER_ID      = os.environ["NAVER_ID"]
 NAVER_PW      = os.environ["NAVER_PW"]
 ADMIN_TOKEN   = os.environ["ADMIN_GITHUB_TOKEN"]
