@@ -1171,13 +1171,19 @@ def main():
                     cookies = cookie_data.get("cookies", [])
                     now_ts = datetime.now(KST).timestamp()
                     expiring_soon = []
+                    # 로그인 유지에 실제로 쓰이는 핵심 쿠키만 검사 (나머지는 원래 수분~수일 단위로
+                    # 자동 만료되는 세션/추적용 쿠키라 항상 "7일 이내"에 걸려 상시 오탐 발생)
+                    CORE_LOGIN_COOKIES = {"NID_AUT", "NID_SES", "nid_inf"}
                     for c in cookies:
+                        name = c.get("name", "unknown")
+                        if name not in CORE_LOGIN_COOKIES:
+                            continue
                         exp = c.get("expires", -1)
                         # now_ts < exp: 아직 유효한 쿠키 중에서
                         # exp < now_ts + 7일: 7일 이내 만료 예정인 것만 경고 (갱신 여유 확보)
                         # (이미 만료된 쿠키는 크롤링에 영향 없으므로 제외)
                         if now_ts < exp < now_ts + (7 * 24 * 3600):
-                            expiring_soon.append(c.get("name", "unknown"))
+                            expiring_soon.append(name)
                     if expiring_soon:
                         send_status_email("warning",
                             detail=f"쿠키 만료 임박 (7일 이내): {', '.join(expiring_soon)}\n"
