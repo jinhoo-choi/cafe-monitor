@@ -15,6 +15,8 @@ import smtplib
 import requests
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.utils import formataddr
+from email.header import Header
 from datetime import datetime, timedelta, timezone
 from playwright.sync_api import sync_playwright
 from nacl import encoding, public
@@ -35,6 +37,19 @@ CAPTCHA_HINTS = [
     "다른 사람이 회원님의 계정", "휴대전화 인증", "본인 확인",
 ]
 
+BOT_NAME = "쿠키갱신봇"
+
+
+def _from_header() -> str:
+    """발신자(From) 표시명 헤더. raw f-string 금지 - formataddr()+Header()로 RFC 2047 인코딩."""
+    return formataddr((str(Header(BOT_NAME, "utf-8")), GMAIL_USER))
+
+
+def _addr_header(addr: str) -> str:
+    """임의 주소(addr)에 봇 표시명을 씌운 헤더. To 필드 전용 (본인 계정 고정용)."""
+    return formataddr((str(Header(BOT_NAME, "utf-8")), addr))
+
+
 def log(msg):
     print(f"[쿠키갱신] {msg}")
 
@@ -42,8 +57,8 @@ def send_email(subject, body_html):
     now_str = datetime.now(KST).strftime("%Y.%m.%d %H:%M")
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"{subject} | {now_str} KST"
-    msg["From"] = f"쿠키갱신봇 <{GMAIL_USER}>"
-    msg["To"] = ", ".join(RECIPIENTS)
+    msg["From"] = _from_header()
+    msg["To"] = _addr_header(GMAIL_USER)
     msg.attach(MIMEText(body_html, "html", "utf-8"))
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(GMAIL_USER, GMAIL_APP_PW)
