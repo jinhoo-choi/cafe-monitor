@@ -1141,14 +1141,14 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count, unresolved_posts
     msg["Date"]    = now_kst.strftime("%a, %d %b %Y %H:%M:%S +0900")
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
-    # To는 항상 본인 계정으로 고정(비워두면 스팸 필터 위험). 실제 배포 대상은 Cc로 이동.
-    # Cc는 그룹 식별 목적이라 표시명 없이 주소 그대로 노출.
+    # To는 항상 본인 계정으로 고정(비워두면 스팸 필터 위험). 실제 배포 대상은 숨은참조(Bcc)로 이동.
+    # Bcc는 헤더에 절대 넣지 않고 SMTP envelope(sendmail 2번째 인자)에만 포함해야
+    # 진짜 "숨은" 참조가 됨 - 메시지에 Bcc 헤더를 쓰면 수신자에게 그대로 노출되므로 금지.
     msg["To"] = _addr_header(GMAIL_USER)
     if total > 0:
-        cc_all = RECIPIENTS + CC_RECIPIENTS
-        msg["Cc"] = ", ".join(cc_all)
-        all_recipients = [GMAIL_USER] + cc_all
-        log_target = f"담당자 전체 ({len(cc_all)}명, Cc)"
+        bcc_all = RECIPIENTS + CC_RECIPIENTS
+        all_recipients = [GMAIL_USER] + bcc_all
+        log_target = f"담당자 전체 ({len(bcc_all)}명, Bcc)"
     else:
         all_recipients = [GMAIL_USER]
         log_target = f"발신자 전용 (확인필요 단독)"
