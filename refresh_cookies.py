@@ -62,7 +62,9 @@ def send_email(subject, body_html):
     msg.attach(MIMEText(body_html, "html", "utf-8"))
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(GMAIL_USER, GMAIL_APP_PW)
-        s.sendmail(GMAIL_USER, RECIPIENTS, msg.as_string())
+        refused = s.sendmail(GMAIL_USER, RECIPIENTS, msg.as_string())
+    if refused:
+        log(f"⚠️ 일부 수신자 거부됨: {list(refused.keys())}")
 
 def encrypt_secret(pub_key_b64, secret_value):
     pub_key = public.PublicKey(pub_key_b64.encode(), encoding.Base64Encoder())
