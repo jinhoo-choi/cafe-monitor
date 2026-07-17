@@ -56,6 +56,31 @@ def _addr_header(addr: str) -> str:
     return formataddr((str(Header(BOT_NAME, "utf-8")), addr))
 
 
+def _notify_send_failure(context: str, refused: dict):
+    """sendmail() 반환값(거부된 수신자)이 있을 때 본인에게 별도 경고 메일 발송.
+    smtplib.sendmail()은 일부(심지어 본인 제외 전원)가 거부돼도 예외를 던지지 않고
+    반환값으로만 알려주므로, 반환값을 무시하면 무음 실패가 발생함 - 이를 감지하기 위한 안전장치."""
+    log(f"⚠️ 일부 수신자 거부됨 [{context}]: {list(refused.keys())}")
+    try:
+        detail_lines = "".join(
+            f"<li>{html.escape(addr)} — {code}: {html.escape(str(msg))}</li>"
+            for addr, (code, msg) in refused.items()
+        )
+        warn_msg = MIMEMultipart("alternative")
+        warn_msg["Subject"] = f"🚨 이메일 일부 수신자 거부됨 - {context}"
+        warn_msg["From"] = _from_header()
+        warn_msg["To"] = _addr_header(GMAIL_USER)
+        warn_msg.attach(MIMEText(
+            f"<p>[{html.escape(context)}] 발송 중 일부 수신자가 SMTP 서버에 의해 거부되었습니다.</p><ul>{detail_lines}</ul>",
+            "html", "utf-8"
+        ))
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
+            s.login(GMAIL_USER, GMAIL_APP_PW)
+            s.sendmail(GMAIL_USER, GMAIL_USER, warn_msg.as_string())
+    except Exception as e:
+        log(f"⚠️ 거부 알림 메일 발송 자체도 실패: {e}")
+
+
 
 COOKIE_FILE = "naver_cookies.json"
 
@@ -250,7 +275,9 @@ def send_status_email(status, detail=""):
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(GMAIL_USER, GMAIL_APP_PW)
-        s.sendmail(GMAIL_USER, GMAIL_USER, msg.as_string())
+        refused = s.sendmail(GMAIL_USER, GMAIL_USER, msg.as_string())
+    if refused:
+        _notify_send_failure(f"상태 이메일({status})", refused)
     log(f"상태 이메일 발송 ({status}) → {GMAIL_USER}")
 
 # ─────────────────────────────────────────
@@ -1155,7 +1182,10 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count, unresolved_posts
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(GMAIL_USER, GMAIL_APP_PW)
-        s.sendmail(GMAIL_USER, all_recipients, msg.as_string())
+        refused = s.sendmail(GMAIL_USER, all_recipients, msg.as_string())
+    if refused:
+        _notify_send_failure(f"부정여론 탐지 알림 ({subject})", refused)
+        log_target += f" — ⚠️ {len(refused)}명 거부됨"
     log(f"이메일 발송 완료 - {log_target}")
 
 # ─────────────────────────────────────────
