@@ -15,7 +15,7 @@ import smtplib
 import requests
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from email.utils import formataddr
+from email.utils import formataddr, formatdate, make_msgid
 from email.header import Header
 from datetime import datetime, timedelta, timezone
 from playwright.sync_api import sync_playwright
@@ -59,6 +59,8 @@ def send_email(subject, body_html):
     msg["Subject"] = f"{subject} | {now_str} KST"
     msg["From"] = _from_header()
     msg["To"] = _addr_header(GMAIL_USER)
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = make_msgid(domain="gmail.com")
     msg.attach(MIMEText(body_html, "html", "utf-8"))
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(GMAIL_USER, GMAIL_APP_PW)
