@@ -18,7 +18,7 @@ import urllib.parse
 import requests
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from email.utils import formataddr
+from email.utils import formataddr, formatdate, make_msgid
 from email.header import Header
 from datetime import datetime, timedelta, timezone
 from playwright.sync_api import sync_playwright
@@ -70,6 +70,8 @@ def _notify_send_failure(context: str, refused: dict):
         warn_msg["Subject"] = f"🚨 이메일 일부 수신자 거부됨 - {context}"
         warn_msg["From"] = _from_header()
         warn_msg["To"] = _addr_header(GMAIL_USER)
+        warn_msg["Date"] = formatdate(localtime=True)
+        warn_msg["Message-ID"] = make_msgid(domain="gmail.com")
         warn_msg.attach(MIMEText(
             f"<p>[{html.escape(context)}] 발송 중 일부 수신자가 SMTP 서버에 의해 거부되었습니다.</p><ul>{detail_lines}</ul>",
             "html", "utf-8"
@@ -270,7 +272,8 @@ def send_status_email(status, detail=""):
     msg["Subject"] = subject
     msg["From"]    = _from_header()
     msg["To"]      = _addr_header(GMAIL_USER)
-    msg["Date"]    = now_kst.strftime("%a, %d %b %Y %H:%M:%S +0900")
+    msg["Date"]    = formatdate(localtime=True)
+    msg["Message-ID"] = make_msgid(domain="gmail.com")
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
@@ -1162,30 +1165,38 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count, unresolved_posts
 </body>
 </html>"""
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"]    = _from_header()
-    msg["Date"]    = now_kst.strftime("%a, %d %b %Y %H:%M:%S +0900")
-    msg.attach(MIMEText(html_body, "html", "utf-8"))
-
-    # To는 항상 본인 계정으로 고정(비워두면 스팸 필터 위험). 실제 배포 대상은 숨은참조(Bcc)로 이동.
-    # Bcc는 헤더에 절대 넣지 않고 SMTP envelope(sendmail 2번째 인자)에만 포함해야
-    # 진짜 "숨은" 참조가 됨 - 메시지에 Bcc 헤더를 쓰면 수신자에게 그대로 노출되므로 금지.
-    msg["To"] = _addr_header(GMAIL_USER)
+    # 수신자별 개별 발송: 각 수신자에게는 자기 자신 주소만 To에 보이는 메일이 감.
+    # (기업 스팸필터가 "받는사람 헤더에 내 주소가 없는 메일"을 의심하는 패턴을 원천 회피)
     if total > 0:
         bcc_all = RECIPIENTS + CC_RECIPIENTS
-        all_recipients = [GMAIL_USER] + bcc_all
-        log_target = f"담당자 전체 ({len(bcc_all)}명, Bcc)"
+        kind = "담당자 전체"
     else:
-        all_recipients = [GMAIL_USER]
-        log_target = f"발신자 전용 (확인필요 단독)"
+        bcc_all = []
+        kind = "발신자 전용 (확인필요 단독)"
+    targets = list(dict.fromkeys([GMAIL_USER] + bcc_all))  # 본인 포함, 중복 제거(순서 유지)
 
+    refused_all = {}
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(GMAIL_USER, GMAIL_APP_PW)
-        refused = s.sendmail(GMAIL_USER, all_recipients, msg.as_string())
-    if refused:
-        _notify_send_failure(f"부정여론 탐지 알림 ({subject})", refused)
-        log_target += f" — ⚠️ {len(refused)}명 거부됨"
+        for addr in targets:
+            m = MIMEMultipart("alternative")
+            m["Subject"] = subject
+            m["From"] = _from_header()
+            m["To"] = _addr_header(addr)
+            m["Date"] = formatdate(localtime=True)
+            m["Message-ID"] = make_msgid(domain="gmail.com")
+            m.attach(MIMEText(html_body, "html", "utf-8"))
+            refused = s.sendmail(GMAIL_USER, [addr], m.as_string())
+            if refused:
+                refused_all.update(refused)
+
+    log_target = f"{kind} ({len(targets)}명, 개별발송)"
+    if refused_all:
+        # 실제 배포 대상(본인 제외) 전원이 거부됐는지로 "무음 전원실패" 여부 판정 → 예외로 승격
+        if bcc_all and set(refused_all.keys()) >= set(bcc_all):
+            raise RuntimeError(f"SMTP 전원 거부(무음 실패) - {subject}: {refused_all}")
+        _notify_send_failure(f"부정여론 탐지 알림 ({subject})", refused_all)
+        log_target += f" — ⚠️ {len(refused_all)}명 거부됨"
     log(f"이메일 발송 완료 - {log_target}")
 
 # ─────────────────────────────────────────
