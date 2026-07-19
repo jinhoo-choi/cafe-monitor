@@ -43,7 +43,7 @@ CLAUDE_MODEL    = SENTIMENT_MODEL
 # ─────────────────────────────────────────
 # 이메일 From/To 표시명 헤더 생성 (RFC 2047 인코딩)
 # ─────────────────────────────────────────
-BOT_NAME = "⚠️ eBiz 부정여론봇"
+BOT_NAME = "부정여론봇"
 
 
 def _from_header() -> str:
