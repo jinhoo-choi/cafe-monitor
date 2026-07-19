@@ -78,7 +78,7 @@ def _notify_send_failure(context: str, refused: dict):
         ))
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
             s.login(GMAIL_USER, GMAIL_APP_PW)
-            s.sendmail(GMAIL_USER, GMAIL_USER, warn_msg.as_string())
+            s.sendmail(GMAIL_USER, [GMAIL_USER], warn_msg.as_string())
     except Exception as e:
         log(f"⚠️ 거부 알림 메일 발송 자체도 실패: {e}")
 
@@ -278,7 +278,7 @@ def send_status_email(status, detail=""):
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(GMAIL_USER, GMAIL_APP_PW)
-        refused = s.sendmail(GMAIL_USER, GMAIL_USER, msg.as_string())
+        refused = s.sendmail(GMAIL_USER, [GMAIL_USER], msg.as_string())
     if refused:
         _notify_send_failure(f"상태 이메일({status})", refused)
     log(f"상태 이메일 발송 ({status}) → {GMAIL_USER}")
@@ -1176,8 +1176,17 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count, unresolved_posts
     targets = list(dict.fromkeys([GMAIL_USER] + bcc_all))  # 본인 포함, 중복 제거(순서 유지)
 
     refused_all = {}
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
-        s.login(GMAIL_USER, GMAIL_APP_PW)
+    # 개별발송(수신자 1명/호출)에서는 거부 시 sendmail()이 dict를 반환하는 게 아니라
+    # SMTPRecipientsRefused 예외를 던짐(수신자 전원=1명 거부이므로). 예외를 잡지 않으면
+    # 한 명 거부로 루프가 중단되어 뒷순번 수신자 전원이 미발송되는 2차 사고가 남.
+    # → 수신자별로 예외를 캡처해 기록만 하고 다음 수신자로 계속 진행.
+    def _smtp_connect():
+        conn = smtplib.SMTP_SSL("smtp.gmail.com", 465)
+        conn.login(GMAIL_USER, GMAIL_APP_PW)
+        return conn
+
+    s = _smtp_connect()
+    try:
         for addr in targets:
             m = MIMEMultipart("alternative")
             m["Subject"] = subject
@@ -1186,9 +1195,28 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count, unresolved_posts
             m["Date"] = formatdate(localtime=True)
             m["Message-ID"] = make_msgid(domain="gmail.com")
             m.attach(MIMEText(html_body, "html", "utf-8"))
-            refused = s.sendmail(GMAIL_USER, [addr], m.as_string())
-            if refused:
-                refused_all.update(refused)
+            try:
+                r = s.sendmail(GMAIL_USER, [addr], m.as_string())
+                if r:  # 단건 발송에선 이론상 빈 dict지만 방어적으로 유지
+                    refused_all.update(r)
+            except smtplib.SMTPRecipientsRefused as e:
+                refused_all.update(e.recipients)
+                log(f"  ⚠️ 수신자 거부 (계속 진행): {addr}")
+            except (smtplib.SMTPServerDisconnected, smtplib.SMTPDataError) as e:
+                # 세션 단절/오염 가능성 → 기록 후 재접속하고 다음 수신자 계속
+                refused_all[addr] = (getattr(e, "smtp_code", -1),
+                                     getattr(e, "smtp_error", str(e).encode()))
+                log(f"  ⚠️ 세션 오류 (재접속 후 계속): {addr} - {e}")
+                try:
+                    s.close()
+                except Exception:
+                    pass
+                s = _smtp_connect()
+    finally:
+        try:
+            s.quit()
+        except Exception:
+            pass
 
     log_target = f"{kind} ({len(targets)}명, 개별발송)"
     if refused_all:
