@@ -125,7 +125,7 @@ def main():
             if hint:
                 log(f"⚠️ 보안 인증 감지: '{hint}' - 자동 갱신 중단")
                 send_email(
-                    "🔴 쿠키 자동 갱신 실패 - 수동 확인 필요",
+                    "쿠키 자동 갱신 실패 - 수동 확인 필요",
                     f"<p>네이버가 보안 인증을 요구해 자동 로그인을 중단했습니다.</p>"
                     f"<p>감지된 문구: <b>{hint}</b></p>"
                     f"<p>반복 시도는 계정 보안 조치를 유발할 수 있어 재시도하지 않았습니다.</p>"
@@ -151,7 +151,7 @@ def main():
             if "nid.naver.com" in page.url:
                 log("❌ 로그인 실패 - 여전히 로그인 페이지")
                 send_email(
-                    "🔴 쿠키 자동 갱신 실패 - 로그인 실패",
+                    "쿠키 자동 갱신 실패 - 로그인 실패",
                     "<p>아이디/비밀번호가 틀렸거나 알 수 없는 이유로 로그인에 실패했습니다.</p>"
                     "<p>NAVER_ID / NAVER_PW Secret을 확인해주세요.</p>"
                 )
@@ -170,7 +170,7 @@ def main():
             if not has_core:
                 log("❌ 핵심 쿠키(NID_AUT/NID_SES) 누락 - 갱신 중단")
                 send_email(
-                    "🔴 쿠키 자동 갱신 실패 - 핵심 쿠키 누락",
+                    "쿠키 자동 갱신 실패 - 핵심 쿠키 누락",
                     "<p>로그인은 됐지만 NID_AUT/NID_SES 쿠키를 확보하지 못했습니다.</p>"
                     "<p>수동 확인이 필요합니다.</p>"
                 )
@@ -184,7 +184,7 @@ def main():
         log(f"✅ NAVER_COOKIES_JSON Secret 갱신 완료 (status={status})")
 
         send_email(
-            "✅ 쿠키 자동 갱신 성공",
+            "쿠키 자동 갱신 성공",
             f"<p>네이버 로그인 쿠키가 자동으로 갱신되어 <b>NAVER_COOKIES_JSON</b> Secret에 반영됐습니다.</p>"
             f"<p>확보된 쿠키: {len(cookie_names)}개</p>"
             f"<p>다음 모니터링 실행부터 새 쿠키로 동작합니다.</p>"
@@ -196,7 +196,7 @@ def main():
         log(f"❌ 예외 발생: {err}")
         try:
             send_email(
-                "🔴 쿠키 자동 갱신 실패 - 예외 발생",
+                "쿠키 자동 갱신 실패 - 예외 발생",
                 f"<pre>{err}</pre>"
             )
         except Exception:
