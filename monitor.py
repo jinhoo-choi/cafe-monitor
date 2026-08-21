@@ -964,6 +964,55 @@ def build_card(post, idx, total):
     <!--[if true]></td></tr></table><![endif]-->"""
 
 
+def regenerate_widespread_reply(title, count):
+    """동일 이슈가 3건 이상 동시 감지됐을 때, 개인 경험(저는 되는데요) 기반 안심성 답변 대신
+    다수 발생 중임을 인지한 답변으로 교체."""
+    prompt = f"""아래는 네이버 카페/블로그에서 최근 짧은 시간 내 동시에 {count}건 감지된 동일 이슈 게시글입니다.
+제목(대표): {title}
+
+이 사안은 {count}명 이상이 동시에 겪고 있는 것으로 보이는 반복 이슈입니다.
+"저는 되는데요?", "저는 잘 되는데 일시적인 걸 수도 있어요" 처럼 개인 경험만으로 안심시키는 답변은 부적절합니다.
+(한 명의 특이 케이스가 아니라 다수가 겪고 있으므로, 개인 정상 사례를 근거로 괜찮다고 하면 안 됨)
+
+reply 작성 규칙 (같은 카페를 보는 일반 회원 톤, 편한 존댓말, 회사 관계자처럼 방어하지 말 것):
+- "저도 비슷한 글 여러 개 본 것 같아요" 처럼 여러 명에게 동시에 일어나고 있다는 걸 인지하고 있다는 티를 낼 것
+- 개인 정상작동 사례로 안심시키려 하지 말 것 (예: "저는 잘 되는데요" 금지)
+- 일시적 현상으로 가볍게 넘기지 말고, 다수 발생 중임을 감안해 고객센터(1544-5000) 확인을 권장할 것
+- 2~3문장, URL·구체적 수치 등 확인 안 된 내용은 단정하지 말 것
+
+반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트 없이 JSON만:
+{{"reply": "추천 대응 답변"}}"""
+    try:
+        response = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": CLAUDE_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": SENTIMENT_MODEL,
+                "max_tokens": 300,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=20,
+        )
+        response.raise_for_status()
+        resp = response.json()
+        if "error" in resp:
+            raise ValueError(resp["error"])
+        text = resp["content"][0]["text"].strip()
+        match = re.search(r'\{.*\}', text, re.S)
+        if not match:
+            raise ValueError("JSON 없음")
+        data = json.loads(match.group())
+        reply = data.get("reply", "").strip()
+        return reply or None
+    except Exception as e:
+        log(f"다발 이슈 reply 재생성 실패 ({e}) - 기존 reply 유지")
+        return None
+
+
 def group_similar_alerts(alert_posts):
     """Claude AI가 유사 이슈 여부를 판단해서 묶음 처리"""
     if len(alert_posts) <= 1:
@@ -1032,6 +1081,11 @@ groups는 인덱스 리스트의 리스트. 모든 인덱스가 정확히 한 �
             related = [p for p in members if p is not rep]
             rep["related_posts"] = related
             rep["common_keywords"] = []
+            if len(group) >= 3:
+                new_reply = regenerate_widespread_reply(rep["title"], len(group))
+                if new_reply:
+                    rep["reply"] = new_reply
+                    log(f"  다발 이슈({len(group)}건) reply 재생성 완료")
             flat_posts.append(rep)
             log(f"유사 이슈 묶음: {[alert_posts[i]['title'][:20] for i in group]}")
 
