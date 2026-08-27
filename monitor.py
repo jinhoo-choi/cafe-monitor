@@ -596,7 +596,9 @@ def get_post_detail(page, post_url, cafe_id):
     """본문 텍스트 반환 - f-e URL로 접근 후 iframe에서 본문 파싱
     반환: (body_2000, body_full) 튜플
     - body_2000: AI 분석용 (2000자 제한)
-    - body_full: 키워드 실존 검증용 (전체 본문)"""
+    - body_full: 키워드 실존 검증용 (전체 본문)
+    실패(빈 본문) 시 대기시간을 늘려 최대 2회까지 재시도 - 일시적 렌더링 지연이
+    "본문 미수집 - 확인필요"로 새는 것을 줄이기 위함."""
     BODY_SELECTORS = [
         ".se-main-container",
         ".ArticleContentBox",
@@ -608,51 +610,26 @@ def get_post_detail(page, post_url, cafe_id):
     ]
     SELECTOR_COMBINED = ", ".join(BODY_SELECTORS)
 
-    try:
-        page.goto(post_url, wait_until="domcontentloaded", timeout=15000)
-    except Exception as e:
-        log(f"  본문 페이지 로드 실패 (제목만으로 분석 진행): {e}")
-        page.wait_for_timeout(1000)
-        return "", ""
+    def _attempt(nav_timeout, selector_timeout):
+        """1회 시도: 페이지 로드 + iframe 4단계 탐색. 실패해도 예외 없이 빈 문자열 반환."""
+        try:
+            page.goto(post_url, wait_until="domcontentloaded", timeout=nav_timeout)
+        except Exception as e:
+            log(f"  본문 페이지 로드 실패: {e}")
+            return ""
 
-    try:
-        page.wait_for_selector(SELECTOR_COMBINED, timeout=8000)
-    except Exception:
-        page.wait_for_timeout(random.randint(1500, 2500))
+        try:
+            page.wait_for_selector(SELECTOR_COMBINED, timeout=selector_timeout)
+        except Exception:
+            page.wait_for_timeout(random.randint(1500, 2500))
 
-    body = ""
+        body = ""
 
-    # 1순위: ca-fe URL 패턴 iframe 우선 탐색 (실제 본문 렌더링 프레임)
-    try:
-        for frame in page.frames:
-            frame_url = frame.url or ""
-            if "ca-fe" in frame_url and "articles" in frame_url:
-                for sel in BODY_SELECTORS:
-                    try:
-                        el = frame.query_selector(sel)
-                        if el:
-                            body = el.inner_text().strip()
-                            if body:
-                                break
-                    except Exception:
-                        continue
-                if body:
-                    log(f"  iframe(ca-fe) 본문 수집 성공")
-                    break
-    except Exception as e:
-        log(f"  iframe(ca-fe) 접근 오류: {e}")
-
-    # 2순위: naver.com 포함 전체 iframe 탐색 (메인 프레임 및 빈 프레임 제외)
-    if not body:
+        # 1순위: ca-fe URL 패턴 iframe 우선 탐색 (실제 본문 렌더링 프레임)
         try:
             for frame in page.frames:
                 frame_url = frame.url or ""
-                if (
-                    "naver.com" in frame_url
-                    and frame_url != page.url
-                    and frame_url != "about:blank"
-                    and "ca-fe" not in frame_url  # 이미 위에서 탐색 완료
-                ):
+                if "ca-fe" in frame_url and "articles" in frame_url:
                     for sel in BODY_SELECTORS:
                         try:
                             el = frame.query_selector(sel)
@@ -663,49 +640,84 @@ def get_post_detail(page, post_url, cafe_id):
                         except Exception:
                             continue
                     if body:
-                        log(f"  iframe(fallback) 본문 수집 성공")
+                        log(f"  iframe(ca-fe) 본문 수집 성공")
                         break
         except Exception as e:
-            log(f"  iframe(fallback) 접근 오류: {e}")
+            log(f"  iframe(ca-fe) 접근 오류: {e}")
 
-    # 3순위: 모든 iframe 대상 탐색 (URL 조건 없이)
-    if not body:
-        try:
-            for frame in page.frames:
-                frame_url = frame.url or ""
-                if frame_url == "about:blank":
-                    continue
-                for sel in BODY_SELECTORS:
-                    try:
-                        el = frame.query_selector(sel)
-                        if el:
-                            candidate = el.inner_text().strip()
-                            if candidate:
-                                body = candidate
-                                break
-                    except Exception:
+        # 2순위: naver.com 포함 전체 iframe 탐색 (메인 프레임 및 빈 프레임 제외)
+        if not body:
+            try:
+                for frame in page.frames:
+                    frame_url = frame.url or ""
+                    if (
+                        "naver.com" in frame_url
+                        and frame_url != page.url
+                        and frame_url != "about:blank"
+                        and "ca-fe" not in frame_url  # 이미 위에서 탐색 완료
+                    ):
+                        for sel in BODY_SELECTORS:
+                            try:
+                                el = frame.query_selector(sel)
+                                if el:
+                                    body = el.inner_text().strip()
+                                    if body:
+                                        break
+                            except Exception:
+                                continue
+                        if body:
+                            log(f"  iframe(fallback) 본문 수집 성공")
+                            break
+            except Exception as e:
+                log(f"  iframe(fallback) 접근 오류: {e}")
+
+        # 3순위: 모든 iframe 대상 탐색 (URL 조건 없이)
+        if not body:
+            try:
+                for frame in page.frames:
+                    frame_url = frame.url or ""
+                    if frame_url == "about:blank":
                         continue
-                if body:
-                    log(f"  iframe(any) 본문 수집 성공")
-                    break
-        except Exception as e:
-            log(f"  iframe(any) 접근 오류: {e}")
-
-    # 4순위: 현재 page에서 직접 파싱
-    if not body:
-        try:
-            for sel in BODY_SELECTORS:
-                el = page.query_selector(sel)
-                if el:
-                    body = el.inner_text().strip()
+                    for sel in BODY_SELECTORS:
+                        try:
+                            el = frame.query_selector(sel)
+                            if el:
+                                candidate = el.inner_text().strip()
+                                if candidate:
+                                    body = candidate
+                                    break
+                        except Exception:
+                            continue
                     if body:
-                        log(f"  직접 파싱 본문 수집 성공")
+                        log(f"  iframe(any) 본문 수집 성공")
                         break
-        except Exception as e:
-            log(f"  본문 직접 파싱 오류: {e}")
+            except Exception as e:
+                log(f"  iframe(any) 접근 오류: {e}")
+
+        # 4순위: 현재 page에서 직접 파싱
+        if not body:
+            try:
+                for sel in BODY_SELECTORS:
+                    el = page.query_selector(sel)
+                    if el:
+                        body = el.inner_text().strip()
+                        if body:
+                            log(f"  직접 파싱 본문 수집 성공")
+                            break
+            except Exception as e:
+                log(f"  본문 직접 파싱 오류: {e}")
+
+        return body
+
+    body = _attempt(nav_timeout=15000, selector_timeout=8000)
 
     if not body:
-        log("  본문 비어 있음 - 제목만으로 AI 분석 진행")
+        log("  본문 비어 있음 - 대기 후 재시도 (1/1)")
+        page.wait_for_timeout(2500)
+        body = _attempt(nav_timeout=20000, selector_timeout=12000)
+
+    if not body:
+        log("  본문 비어 있음 (재시도 후에도 실패) - 제목만으로 AI 분석 진행")
 
     return body[:2000], body
 
