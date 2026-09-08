@@ -145,6 +145,13 @@ NEGATIVE_HINTS = [   # AI 호출 전 룰필터 - 하나라도 있으면 Claude �
     "배상", "보상", "제재", "지연", "소송", "먹튀", "횡령", "유출", "해킹",
 ]
 
+# 본문 미수집이어도 "확인필요" 목록에 넣지 않을 노이즈성 게시글 제목 패턴
+# (가계부·이벤트 인증성 글은 본문이 이미지 위주라 상시 미수집되며, 부정여론과 무관)
+UNRESOLVED_SKIP_PATTERNS = [
+    "가계부", "한달살기", "한달 살기", "무지출", "지출",
+    "살기 도전", "살기도전", "만원살기", "만원 살기",
+]
+
 # ─────────────────────────────────────────
 # 광고성 게시글 제외 패턴 (AI 호출 전 제목 기준 사전 차단)
 # ─────────────────────────────────────────
@@ -1459,12 +1466,16 @@ def main():
                         if not has_hint:
                             # 본문 미수집 + 부정힌트 없음 → 확인필요 섹션에 적재
                             if not body:
-                                post["cafe_name"]  = cafe_name
-                                post["source"]     = "cafe"
-                                post["matched_kw"] = matched
-                                unresolved_posts.append(post)
-                                mark_seen(f"{cafe_id}:{post['post_id']}")
-                                log(f"  본문 미수집 - 확인필요 목록 추가")
+                                if any(p in post["title"] for p in UNRESOLVED_SKIP_PATTERNS):
+                                    mark_seen(f"{cafe_id}:{post['post_id']}")
+                                    log(f"  본문 미수집 - 가계부/이벤트성 제목이라 확인필요 제외")
+                                else:
+                                    post["cafe_name"]  = cafe_name
+                                    post["source"]     = "cafe"
+                                    post["matched_kw"] = matched
+                                    unresolved_posts.append(post)
+                                    mark_seen(f"{cafe_id}:{post['post_id']}")
+                                    log(f"  본문 미수집 - 확인필요 목록 추가")
                             else:
                                 log(f"  룰필터 통과 - AI 분석 생략 (부정 힌트 없음)")
                                 mark_seen(f"{cafe_id}:{post['post_id']}")
@@ -1541,13 +1552,16 @@ def main():
 
                     if not has_hint:
                         if not body:
-                            post["cafe_name"]  = "네이버 블로그"
-                            post["source"]     = "blog"
-                            post["title"]      = title
-                            post["matched_kw"] = matched
-                            post["post_time"]  = post_time
-                            unresolved_posts.append(post)
-                            log(f"  본문 미수집 - 확인필요 목록 추가")
+                            if any(p in title for p in UNRESOLVED_SKIP_PATTERNS):
+                                log(f"  본문 미수집 - 가계부/이벤트성 제목이라 확인필요 제외")
+                            else:
+                                post["cafe_name"]  = "네이버 블로그"
+                                post["source"]     = "blog"
+                                post["title"]      = title
+                                post["matched_kw"] = matched
+                                post["post_time"]  = post_time
+                                unresolved_posts.append(post)
+                                log(f"  본문 미수집 - 확인필요 목록 추가")
                         else:
                             log(f"  룰필터 통과 - AI 분석 생략 (부정 힌트 없음)")
                         mark_seen(f"blog:{post['post_id']}")
