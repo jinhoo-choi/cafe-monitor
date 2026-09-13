@@ -2,6 +2,11 @@ name: 네이버 카페 부정여론 모니터링
 
 on:
   workflow_dispatch:          # cron-job.org 또는 수동 실행
+    inputs:
+      dry_run:
+        description: 'LLM 호출·메일 발송 없이 수집·필터만 검증 (비용 0)'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -46,6 +51,7 @@ jobs:
           NOTIFY_EMAIL:   ${{ secrets.NOTIFY_EMAIL }}
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
           EMAIL_CC:       ${{ secrets.EMAIL_CC }}
+          DRY_RUN:        ${{ inputs.dry_run && '1' || '' }}
         run: python monitor.py
 
       - name: DB 변경사항 커밋
@@ -55,4 +61,9 @@ jobs:
           git config user.email "github-actions@github.com"
           git add seen_posts.json || true
           git diff --cached --quiet || git commit -m "update seen_posts.json"
-          git pull --rebase origin main && git push origin main || echo "push 실패 - 다음 실행에서 재시도"
+          # push 재시도: 동시 push로 non-fast-forward 실패 시 다음 실행이 중복 처리하는 것을 방지
+          for i in 1 2 3; do
+            git pull --rebase -q origin main || true
+            git push origin main && break
+            sleep $((i * 5))
+          done
