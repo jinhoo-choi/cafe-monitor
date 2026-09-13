@@ -40,6 +40,31 @@ GROUPING_MODEL  = os.getenv("GROUPING_MODEL",  "claude-sonnet-4-6")   # 유사 �
 # 하위호환: 기존 CLAUDE_MODEL 참조 코드가 있으면 감성 모델로 매핑
 CLAUDE_MODEL    = SENTIMENT_MODEL
 
+# dry-run: 수집·필터까지만 돌리고 LLM 호출·메일 발송 직전에 멈춤 (테스트 비용 0)
+DRY_RUN = os.getenv("DRY_RUN", "") == "1"
+
+# API 호출 계측 (호출수·토큰·추정비용). 단가는 공식 요금표 확인 후 조정 필요.
+API_STATS = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "delivered": 0}
+PRICE_IN_PER_MTOK  = float(os.getenv("PRICE_IN_PER_MTOK",  "3"))
+PRICE_OUT_PER_MTOK = float(os.getenv("PRICE_OUT_PER_MTOK", "15"))
+
+
+def _track_usage(resp):
+    """Anthropic 응답의 usage를 누적. 추정 아닌 실측 기반 비용 산출용."""
+    u = (resp or {}).get("usage") or {}
+    API_STATS["calls"] += 1
+    API_STATS["input_tokens"]  += u.get("input_tokens", 0)
+    API_STATS["output_tokens"] += u.get("output_tokens", 0)
+
+
+def _stats_line():
+    delivered = API_STATS["delivered"]
+    cost = (API_STATS["input_tokens"] / 1_000_000 * PRICE_IN_PER_MTOK
+            + API_STATS["output_tokens"] / 1_000_000 * PRICE_OUT_PER_MTOK)
+    per = f" | 건당 ${cost/delivered:.4f}" if delivered else ""
+    return (f"API 호출 {API_STATS['calls']}회 | in {API_STATS['input_tokens']:,} "
+            f"out {API_STATS['output_tokens']:,} | 추정 ${cost:.4f}{per}")
+
 # ─────────────────────────────────────────
 # 이메일 From/To 표시명 헤더 생성 (RFC 2047 인코딩)
 # ─────────────────────────────────────────
@@ -217,6 +242,9 @@ def send_status_email(status, detail=""):
     발신자(GMAIL_USER)에게만 발송하는 운영 상태 알림
     status: "no_result" | "error"
     """
+    if DRY_RUN:
+        log(f"[DRY_RUN] 상태메일({status}) 발송 생략")
+        return
     now_kst = datetime.now(KST)
     now_str = now_kst.strftime("%Y.%m.%d %H:%M")
 
@@ -812,6 +840,9 @@ reply는 같은 카페를 눈팅하는 일반 회원이 댓글 다는 느낌. �
 
 추가 규칙: (1) 고객센터 번호가 필요하면 반드시 "1544-5000"만 사용. 다른 번호는 절대 만들어내지 말 것 (2) [증권 기본 구조]로 설명되지 않는 사안은 함부로 "정상"이라 단정하지 말고, URL·구체적 수치·정책 등 확인 안 된 내용은 "정확한 건 앱이나 고객센터에서 확인해보세요" 수준으로 마무리 (3) 뉴스 공유·사건 사고 글은 "저도 봤는데 좀 당황스럽네요" 같은 가벼운 반응 수준으로, 금감원·보상 등 극단적 표현 금지 (4) 질문글이면 아는 선에서 짧게 + 불확실하면 "정확한 건 직접 확인해보시는 게 나을 것 같아요" (5) 대응 불필요한 경우 그 이유 한 줄 (6) 앱 메뉴명·버튼명·탭 이름 등 구체적 UI 경로는 지어내지 말 것 (7) 회사를 변호·대변하는 논조(예: "실무 영향은 제한적", "직접 책임 구조가 아니라서") 사용 금지 - 이런 표현은 회사 관계자가 쓴 것처럼 보여서 신뢰를 해침."""
 
+    if DRY_RUN:
+        return {"is_negative": False, "summary": "DRY_RUN(LLM 미호출)", "score": 0, "reply": ""}
+
     try:
         response = requests.post(
             "https://api.anthropic.com/v1/messages",
@@ -829,6 +860,7 @@ reply는 같은 카페를 눈팅하는 일반 회원이 댓글 다는 느낌. �
         )
         response.raise_for_status()
         resp = response.json()
+        _track_usage(resp)
         if "error" in resp:
             err_type = resp["error"].get("type", "")
             if err_type == "overloaded_error":
@@ -842,6 +874,7 @@ reply는 같은 카페를 눈팅하는 일반 회원이 댓글 다는 느낌. �
                 )
                 response.raise_for_status()
                 resp = response.json()
+                _track_usage(resp)
                 if "error" in resp:
                     log(f"AI 재시도 실패: {resp['error'].get('message','')}")
                     return {"is_negative": False, "summary": "분석 실패", "score": 0, "reply": ""}
@@ -1020,6 +1053,9 @@ reply 작성 규칙 (같은 카페를 보는 일반 회원 톤, 편한 존댓말
 
 반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트 없이 JSON만:
 {{"reply": "추천 대응 답변"}}"""
+    if DRY_RUN:
+        return None
+
     try:
         response = requests.post(
             "https://api.anthropic.com/v1/messages",
@@ -1037,6 +1073,7 @@ reply 작성 규칙 (같은 카페를 보는 일반 회원 톤, 편한 존댓말
         )
         response.raise_for_status()
         resp = response.json()
+        _track_usage(resp)
         if "error" in resp:
             raise ValueError(resp["error"])
         text = resp["content"][0]["text"].strip()
@@ -1075,6 +1112,9 @@ def group_similar_alerts(alert_posts):
 {{"groups": [[0, 1], [2], [3, 4]]}}
 groups는 인덱스 리스트의 리스트. 모든 인덱스가 정확히 한 번씩 포함되어야 함."""
 
+    if DRY_RUN:
+        return alert_posts, []
+
     try:
         response = requests.post(
             "https://api.anthropic.com/v1/messages",
@@ -1092,6 +1132,7 @@ groups는 인덱스 리스트의 리스트. 모든 인덱스가 정확히 한 �
         )
         response.raise_for_status()
         resp = response.json()
+        _track_usage(resp)
         if "error" in resp:
             raise ValueError(resp["error"])
         text = resp["content"][0]["text"].strip()
@@ -1132,6 +1173,10 @@ groups는 인덱스 리스트의 리스트. 모든 인덱스가 정확히 한 �
 
 def send_alert_batch(alert_posts, crawled_count, keyword_count, unresolved_posts=None):
     """탐지 게시글 담당자 이메일 발송 (아웃룩/Gmail/모바일 호환)"""
+    if DRY_RUN:
+        log(f"[DRY_RUN] 알림메일 발송 생략 (탐지 {len(alert_posts)}건)")
+        return
+    API_STATS["delivered"] = len(alert_posts)
     unresolved_posts = unresolved_posts or []
     total    = len(alert_posts)
     now_kst  = datetime.now(KST)
@@ -1349,6 +1394,18 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count, unresolved_posts
 # ─────────────────────────────────────────
 
 def main():
+    # 발송 대상·자격증명 선확인 — 실패 시 크롤링·LLM 호출 전에 중단 (만든 뒤 버리는 낭비 방지)
+    if not DRY_RUN:
+        try:
+            if not RECIPIENTS:
+                raise RuntimeError("NOTIFY_EMAIL 비어있음")
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as s:
+                s.login(GMAIL_USER, GMAIL_APP_PW)
+            log(f"발송 대상 확인 완료: {', '.join(RECIPIENTS)}")
+        except Exception as e:
+            log(f"발송 대상 미확인 ({e}) - 생성 전에 중단합니다. LLM 호출 0건.")
+            raise SystemExit(1)
+
     init_db()
     cleanup_db()
     log("=" * 48)
@@ -1655,6 +1712,7 @@ def main():
         send_status_email("error", detail=err)
         raise
 
+    log(_stats_line())
     log("모니터링 완료")
 
 if __name__ == "__main__":
