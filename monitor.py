@@ -1485,6 +1485,7 @@ def main():
             total_keywords   = 0
             all_alerts       = []
             unresolved_posts = []  # 본문 미수집으로 AI 분석 생략된 게시글
+            keyword_matched_posts = []  # 키워드는 걸렸으나 룰필터/AI에서 걸러진 전체 목록 (탐지없음 감사용)
             skipped_cafes    = []  # 쿠키 만료로 건너뛴 로그인 필요 카페
 
             for cafe in CAFES:
@@ -1521,6 +1522,7 @@ def main():
 
                         total_keywords += 1
                         log(f"키워드 [{matched}] 탐지: {post['title'][:40]}...")
+                        keyword_matched_posts.append(f"[{cafe_name}] {post['title']} ({post.get('url','')})")
 
                         # 본문 수집 (body: AI 분석용 2000자, body_full: 검증용 전체)
                         body, body_full = get_post_detail(page, post["url"], cafe_id)
@@ -1603,6 +1605,7 @@ def main():
                     detail = get_blog_detail(page, post["url"])
                     title, body, date_str = detail["title"], detail["body"], detail["date_str"]
                     body_full = detail.get("body_full", body)
+                    keyword_matched_posts.append(f"[블로그] {title} ({post['url']})")
 
                     if not title:
                         # 제목조차 못 가져오면 스킵 (삭제/비공개 게시글 가능성)
@@ -1704,7 +1707,16 @@ def main():
                     unresolved_posts=unresolved_posts,
                 )
             else:
-                send_status_email("no_result")
+                if keyword_matched_posts:
+                    list_txt = "\n".join(f"- {p}" for p in keyword_matched_posts)
+                    no_result_detail = (
+                        f"정상 실행되었으나 부정 탐지 게시글이 없습니다.\n\n"
+                        f"실행 시각: {datetime.now(KST).strftime('%Y.%m.%d %H:%M')} KST\n\n"
+                        f"[키워드 탐지 전체 목록 - {len(keyword_matched_posts)}건, 룰필터/AI에서 비부정 판정]\n{list_txt}"
+                    )
+                else:
+                    no_result_detail = ""
+                send_status_email("no_result", detail=no_result_detail)
 
     except Exception as e:
         err = traceback.format_exc()
