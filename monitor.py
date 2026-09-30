@@ -742,6 +742,17 @@ def get_post_detail(page, post_url, cafe_id):
             except Exception as e:
                 log(f"  본문 직접 파싱 오류: {e}")
 
+        # 진단: 본문 미수집 시 ca-fe 프레임 화면 문구 로깅 (가입/등급 제한 여부 확인용)
+        if not body:
+            try:
+                for frame in page.frames:
+                    if "ca-fe" in (frame.url or ""):
+                        snippet = frame.inner_text("body")[:150].replace("\n", " ")
+                        log(f"  [진단] 본문 미수집 화면: {snippet}")
+                        break
+            except Exception:
+                pass
+
         return body
 
     body = _attempt(nav_timeout=15000, selector_timeout=8000)
