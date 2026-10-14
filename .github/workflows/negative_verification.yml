@@ -1,0 +1,68 @@
+name: 부정여론 구독 개선안 본인 검수
+on:
+  push:
+    branches: [codex/negative-subscription-verification]
+    paths: [negative_verification_request.json]
+permissions:
+  contents: read
+concurrency:
+  group: negative-subscription-verification
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 검수 의존성 설치
+        run: pip install requests playwright jsonschema
+      - name: 수집 요청 확인
+        id: request
+        run: |
+          python - <<'PY'
+          import json,os
+          from negative_verification_request import arguments
+          request=arguments(json.load(open('negative_verification_request.json')))
+          with open(os.environ['GITHUB_OUTPUT'],'a') as output:
+              output.write('collect='+str(request['operation']=='collect').lower()+'\n')
+          PY
+      - name: 수집용 브라우저 설치
+        if: steps.request.outputs.collect == 'true'
+        run: playwright install --with-deps chromium
+      - name: 기존 로그인 쿠키 복원
+        if: steps.request.outputs.collect == 'true'
+        env:
+          NAVER_COOKIE_STATE: ${{ secrets.NAVER_COOKIES_JSON }}
+        run: |
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          state=os.environ.get('NAVER_COOKIE_STATE','')
+          if state:
+              json.loads(state)
+              Path('naver_cookies.json').write_text(state)
+              Path('naver_cookies.json').chmod(0o600)
+          PY
+      - name: 운영 이력 읽기 전용 스냅샷
+        run: git show origin/main:seen_posts.json > /tmp/negative_production_seen.json
+      - name: 연결·수집 또는 본인 테스트메일
+        env:
+          NEGATIVE_QUEUE_TOKEN: ${{ secrets.ADMIN_GITHUB_TOKEN }}
+          NEGATIVE_SEEN_PATH: /tmp/negative_production_seen.json
+          TEST_MODE: '1'
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PW: ${{ secrets.GMAIL_APP_PW }}
+          NOTIFY_EMAIL: ${{ secrets.GMAIL_USER }}
+          EMAIL_CC: ''
+          CLAUDE_API_KEY: ''
+        run: python negative_verification_request.py
+      - name: 운영 코드·이력·수신자 경로 변경 없음 확인
+        run: git diff --exit-code -- monitor.py seen_posts.json .github/workflows/monitor.yml
+      - name: 로그인 쿠키 제거
+        if: always()
+        run: rm -f naver_cookies.json
