@@ -406,6 +406,9 @@ def selected_groups(result):
 def render(job, result, production=False):
     inputs, posts = validate(job, result, allow_production=production)
     selected, deferred = selected_groups(result)
+    if production or job.get('production_preview') is True:
+        from negative_mail import render as render_original
+        return render_original(job, result, inputs, posts, selected, deferred, production=production)
     counts = {verdict: sum(p['verdict']==verdict for p in posts.values()) for verdict in ('negative','non_negative','needs_review')}
     esc = html.escape
     categories = {'app_access':'접속·로그인','order_execution':'주문·체결','withdrawal_settlement':'출금·결제',
@@ -515,7 +518,8 @@ def consume(queue, job_id):
     key = hashlib.sha256(address.encode()).hexdigest()
     latest.update(status='sending',sending_at=now().isoformat(),receipts={key:'sending'})
     queue.put(path,latest,latest_sha)
-    subject = '[TEST] [부정여론] 구독 개선안 실제·과거 게시글 검수 | ' + now().astimezone(KST).strftime('%m월 %d일 %H:%M')
+    test_label = '기존 HTML 형식 복구 검수' if job.get('production_preview') is True else '구독 개선안 실제·과거 게시글 검수'
+    subject = '[TEST] [부정여론] ' + test_label + ' | ' + now().astimezone(KST).strftime('%m월 %d일 %H:%M')
     try:
         send_owner(subject,body,address)
         latest, sha = queue.get(path)
@@ -536,4 +540,5 @@ def consume(queue, job_id):
         raise
     print(json.dumps({'job_id':job_id,'status':'verified','self_test':True,'smtp_accepted':1,
                       'production_recipients':0,'production_seen_writes':0,'paid_ai_calls':0}))
+
 

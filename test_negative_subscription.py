@@ -204,13 +204,14 @@ class ProductionRegression(unittest.TestCase):
             with self.subTest(edit=edit),self.assertRaises(ValueError):bot.request_arguments({**valid,**edit})
         with patch.dict(os.environ,{'GITHUB_REF':'refs/heads/test'}),self.assertRaises(ValueError):bot.request_arguments(valid)
 
-    def test_compact_mail_keeps_actions_and_separates_source_from_body_holds(self):
+    def test_original_mail_layout_replaces_compact_review_layout(self):
         rendered=common.render(self.job,self.result,production=True)
         self.assertIn('AI 요약',rendered)
-        self.assertIn('내부 확인·대응',rendered)
-        self.assertIn('검토용 답변 초안',rendered)
-        self.assertIn('수집원 오류·접근 보류 0곳',rendered)
-        self.assertIn('본문 미수집 0건',rendered)
+        self.assertIn('AI 추천 대응',rendered)
+        self.assertIn('background:#c62828',rendered)
+        self.assertIn('부정 강도 :',rendered)
+        self.assertNotIn('내부 확인·대응',rendered)
+        self.assertNotIn('부정여론 모니터링 결과',rendered)
         self.assertNotIn('비부정·보류 판정 근거',rendered)
         self.assertNotIn('unconfirmed',rendered)
         self.assertNotIn('[TEST]',rendered)
@@ -232,7 +233,7 @@ class ProductionRegression(unittest.TestCase):
                                 'representative_post_id':'blog:offline0','group_reason':'같은 주문 실패'}]
         self.rehash()
         rendered=common.render(self.job,self.result,production=True)
-        self.assertIn('같은 이슈 게시글',rendered)
+        self.assertIn('유사 이슈',rendered)
         self.assertIn('224000000002',rendered)
         self.assertIn('NAVER_COOKIES_JSON 재등록 필요',rendered)
         self.assertLess(rendered.index('NAVER_COOKIES_JSON'),rendered.index('AI 요약'))
@@ -248,6 +249,70 @@ class ProductionRegression(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'유료 API'):module._require_paid_engine()
         self.assertEqual(module.API_STATS['calls'],0)
 
+    def test_original_card_is_reused_without_a_paid_client(self):
+        import ast,html
+        import negative_mail
+        source=Path('monitor.py').read_text()
+        node=next(n for n in ast.parse(source).body if isinstance(n,ast.FunctionDef) and n.name=='build_card')
+        namespace={'html':html,'KST':common.KST}
+        exec(compile(ast.Module(body=[node],type_ignores=[]),'original-card','exec'),namespace)
+        value={'title':'한국투자증권 주문 문의','url':'https://m.blog.naver.com/offline/224000000001',
+               'matched_kw':'한국투자증권','score':2,'summary':'원문 요약','reply':'검토용 답변','source':'blog'}
+        self.assertEqual(namespace['build_card'](value,1,1),negative_mail.build_card(value,1,1))
+        self.smtp.assert_not_called()
+
+    def test_owner_preview_uses_restored_layout_without_becoming_production(self):
+        self.job.update(mode='verification',self_test=True,production_preview=True)
+        rendered=common.render(self.job,self.result)
+        self.assertIn('background:#c62828',rendered)
+        self.assertIn('AI 추천 대응',rendered)
+        self.assertIn('[TEST] 본인 전용',rendered)
+        self.assertEqual(self.job['mode'],'verification')
+        self.smtp.assert_not_called()
+
+    def test_no_negative_status_keeps_original_green_layout(self):
+        self.result['posts'][0].update(verdict='non_negative',score=0)
+        self.result['groups']=[]
+        rendered=common.render(self.job,self.result,production=True)
+        self.assertIn('background:#2e7d32',rendered)
+        self.assertIn('탐지 없음 - 정상 실행',rendered)
+        self.assertNotIn('AI 추천 대응',rendered)
+        self.job['input']['collection']={'coverage':[{'status':'error','listed':0}]}
+        self.rehash()
+        degraded=common.render(self.job,self.result,production=True)
+        self.assertIn('수집 상태 확인 필요',degraded)
+        self.assertNotIn('탐지 없음 - 정상 실행',degraded)
+
+    def test_review_only_keeps_original_review_panel(self):
+        self.job['input']['items'][0].update(body_status='missing',body_excerpt='')
+        self.result['posts'][0].update(verdict='needs_review',score=None,evidence_quotes=[])
+        self.result['groups']=[]
+        self.rehash()
+        rendered=common.render(self.job,self.result,production=True)
+        self.assertIn('확인필요',rendered)
+        self.assertIn('본문 미수집 1건',rendered)
+        self.assertIn('224000000001',rendered)
+        self.assertNotIn('탐지 없음 - 정상 실행',rendered)
+
+    def test_original_layout_escapes_untrusted_title_and_date(self):
+        self.job['input']['items'][0].update(title='<script>한국투자증권</script>',date_raw='<img src=x>')
+        self.rehash()
+        rendered=common.render(self.job,self.result,production=True)
+        self.assertIn('&lt;script&gt;',rendered)
+        self.assertIn('&lt;img src=x&gt;',rendered)
+        self.assertNotIn('<script>',rendered)
+        self.assertNotIn('<img src=x>',rendered)
+
+    def test_restored_body_is_sent_as_html_mime(self):
+        from email import message_from_string
+        rendered=common.render(self.job,self.result,production=True)
+        mail=message_from_string(bot.message('test',rendered,'owner@example.invalid','ops@example.invalid'))
+        part=next(p for p in mail.walk() if p.get_content_type()=='text/html')
+        self.assertEqual(part.get_payload(decode=True).decode('utf-8'),rendered)
+        self.assertIn('background:#c62828',part.get_payload(decode=True).decode('utf-8'))
+        self.smtp.assert_not_called()
+
 
 if __name__=='__main__':unittest.main()
+
 
