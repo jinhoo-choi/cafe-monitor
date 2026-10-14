@@ -180,11 +180,13 @@ def consume(queue, job_id):
     stamp = now().astimezone(common.KST).isoformat()
     expected = {**retained_history(state),**{identifier:stamp for identifier in processed}}
     expected_hash = hashlib.sha256(history_bytes(expected)).hexdigest()
-    queue.put('previews/'+job_id+'.json',{'html':body,'paid_ai_calls':0})
-    queue.put('deferred/'+job_id+'.json',{'groups':deferred,'mode':'production',
-              'member_post_ids':[p for g in deferred for p in g['member_post_ids']]})
-    queue.put('reviews/'+job_id+'.json',{'post_ids':[p['post_id'] for p in posts.values() if p['verdict']=='needs_review'],
-                                        'retry_next_collection':True})
+    # SMTP 로그인 실패 후 pending 재소비에서도 기존 파일의 SHA를 사용한다.
+    for path, value in (('previews/'+job_id+'.json',{'html':body,'paid_ai_calls':0}),
+            ('deferred/'+job_id+'.json',{'groups':deferred,'mode':'production',
+             'member_post_ids':[p for g in deferred for p in g['member_post_ids']]}),
+            ('reviews/'+job_id+'.json',{'post_ids':[p['post_id'] for p in posts.values() if p['verdict']=='needs_review'],
+             'retry_next_collection':True})):
+        queue.put(path,value,queue.get(path)[1])
     server = None
     try:
         server = smtplib.SMTP_SSL('smtp.gmail.com',465,timeout=20)
@@ -329,3 +331,4 @@ if __name__ == '__main__':
         # 스키마 오류에 포함될 수 있는 비공개 원문·분석을 공개 로그에 출력하지 않는다.
         print('부정여론 구독 경로 보류: '+type(error).__name__,file=sys.stderr)
         raise SystemExit(1)
+

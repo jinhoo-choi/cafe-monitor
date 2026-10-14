@@ -216,6 +216,33 @@ class ProductionRegression(unittest.TestCase):
         self.assertNotIn('[TEST]',rendered)
         self.smtp.assert_not_called()
 
+    def test_pending_after_login_failure_can_be_consumed_again(self):
+        self.server.login.side_effect=smtplib.SMTPAuthenticationError(535,b'no')
+        with self.assertRaises(smtplib.SMTPAuthenticationError):bot.consume(self.queue,self.job['job_id'])
+        self.server.login.side_effect=None
+        self.assertTrue(bot.consume(self.queue,self.job['job_id']))
+        self.assertEqual(self.queue.get(self.queue.path)[0]['status'],'delivery_complete')
+
+    def test_group_member_links_and_cookie_warning_in_mail(self):
+        self.job,self.result=fixture(2)
+        self.job.update(mode='production',self_test=False)
+        for entry in self.job['input']['items']:entry['dataset']='live'
+        self.job['input']['collection']={'coverage':[{'status':'cookie_required'}]}
+        self.result['groups']=[{'group_id':'g','issue_key':'k','member_post_ids':['blog:offline0','blog:offline1'],
+                                'representative_post_id':'blog:offline0','group_reason':'같은 주문 실패'}]
+        self.rehash()
+        rendered=common.render(self.job,self.result,production=True)
+        self.assertIn('같은 이슈 게시글',rendered)
+        self.assertIn('224000000002',rendered)
+        self.assertIn('NAVER_COOKIES_JSON 재등록 필요',rendered)
+        self.assertLess(rendered.index('NAVER_COOKIES_JSON'),rendered.index('AI 요약'))
+        self.job['input']['collection']={'coverage':[], 'cookie_expiring':['NID_AUT']}
+        self.rehash()
+        self.assertIn('7일 내 만료 예정(NID_AUT)',common.render(self.job,self.result,production=True))
+        self.job['input']['collection']={'coverage':[]}
+        self.rehash()
+        self.assertNotIn('재등록',common.render(self.job,self.result,production=True))
+
     def test_paid_model_paths_require_explicit_api_setting(self):
         module=common.collector()
         with self.assertRaisesRegex(RuntimeError,'유료 API'):module._require_paid_engine()
@@ -223,3 +250,4 @@ class ProductionRegression(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+

@@ -190,6 +190,14 @@ def collect(queue, fixture_id=None, production=False):
         browser = playwright.chromium.launch(headless=True)
         cookie_path = Path('naver_cookies.json')
         cookie_loaded = cookie_path.exists()
+        cookie_expiring = []
+        if cookie_loaded:
+            try:
+                limit = now().timestamp()
+                cookie_expiring = sorted({c['name'] for c in json.loads(cookie_path.read_text()).get('cookies', [])
+                    if c.get('name') in {'NID_AUT', 'NID_SES', 'nid_inf'} and limit < c.get('expires', -1) < limit+7*86400})
+            except (OSError, ValueError, TypeError, KeyError):
+                pass
         context = browser.new_context(storage_state=str(cookie_path)) if cookie_loaded else browser.new_context()
         page = context.new_page()
         if cookie_loaded:
@@ -309,7 +317,8 @@ def collect(queue, fixture_id=None, production=False):
            'job_id': job_id, 'status': 'pending', 'created_at': now().isoformat(),
            'expires_at': (now()+timedelta(minutes=settings['job_ttl_minutes'])).isoformat(),
            'input': {'policy_version': POLICY, 'seen_hash': state_hash, 'items': list(by_id.values()),
-                     'collection': {'coverage': coverage, 'historical': historical, 'cookie_loaded': cookie_loaded}},
+                     'collection': {'coverage': coverage, 'historical': historical, 'cookie_loaded': cookie_loaded,
+                                    'cookie_expiring': cookie_expiring}},
            'receipts': {}, 'paid_ai_calls': 0}
     job['input_hash'] = digest(job['input'])
     queue.put('jobs/'+job_id+'.json', job)
@@ -411,6 +420,9 @@ def render(job, result, production=False):
         label = '실제 과거 게시글 재검수' if source['dataset']=='historical' else '실제 최근 수집 게시글'
         previous = f" · 당시 로그 {source['previous_score']}점" if source.get('previous_score') is not None else ''
         quotes = '“'+esc(post['evidence_quotes'][0]['quote'])+'”'
+        others = ''.join(f"<li><a href='{esc(inputs[m]['url'],quote=True)}'>{esc(inputs[m]['title'])}</a></li>"
+                         for m in group['member_post_ids'] if m != identifier)
+        related = f'<p style="font-size:13px;"><b>같은 이슈 게시글</b></p><ul style="font-size:13px;">{others}</ul>' if others else ''
         cards.append(f'''<table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #dce3eb;margin-bottom:18px;border-radius:8px;"><tr><td style="padding:18px;">
 <p style="font-size:12px;color:#697586;margin:0 0 8px;">{label}{esc(previous)} · 게시글 {len(group['member_post_ids'])}건(피해자 수 아님)</p>
 <h3 style="margin:0 0 10px;font-size:17px;"><a href="{esc(source['url'],quote=True)}" style="color:#24344b;">{esc(source['title'])}</a></h3>
@@ -418,10 +430,17 @@ def render(job, result, production=False):
 <p><b>AI 요약</b><br>{esc(post['summary'])}</p>
 <p><b>내부 확인·대응</b><br>{esc(post['internal_action'])}</p>
 <p style="background:#f1f6fb;padding:12px;"><b>검토용 답변 초안 — 자동 게시 안 함</b><br>{esc(post['reply_draft'])}</p>
-<p style="font-size:12px;color:#667085;"><b>원문 근거</b><br>{quotes}</p></td></tr></table>''')
+<p style="font-size:12px;color:#667085;"><b>원문 근거</b><br>{quotes}</p>{related}</td></tr></table>''')
     unresolved = ''.join(f"<li style='margin-bottom:8px;'><a href='{esc(inputs[p['post_id']]['url'],quote=True)}'>{esc(inputs[p['post_id']]['title'])}</a><br>{esc(p['reason'])}</li>" for p in posts.values() if p['verdict']=='needs_review')
     coverage = job['input'].get('collection',{}).get('coverage',[])
     failures = sum(s['status']!='ok' for s in coverage)
+    collection = job['input'].get('collection',{})
+    cookie_note = ''
+    if any(s['status']=='cookie_required' for s in coverage):
+        cookie_note = '네이버 로그인 쿠키 확인 필요 — 회원전용 카페 미수집. NAVER_COOKIES_JSON 재등록 필요'
+    elif collection.get('cookie_expiring'):
+        cookie_note = '네이버 쿠키 7일 내 만료 예정('+', '.join(collection['cookie_expiring'])+') — 재등록 준비'
+    cookie_html = f'<p style="background:#fff4e5;padding:10px;font-size:13px;"><b>{esc(cookie_note)}</b></p>' if cookie_note else ''
     missing = sum(not body_available(inputs[p['post_id']]) for p in posts.values() if p['verdict']=='needs_review')
     other_review = counts['needs_review']-missing
     badge = '부정여론 모니터링' if production else '[TEST] 본인 전용 · 운영 발송 0 · 운영 DB 쓰기 0'
@@ -433,7 +452,7 @@ def render(job, result, production=False):
 <h1 style="font-size:24px;">{heading}</h1>
 <p>{intro}</p>
 <p><b>전체 {len(posts)}건 · 부정 {counts['negative']}건 · 비부정 {counts['non_negative']}건 · 보류 {counts['needs_review']}건</b><br>선정 이슈 {len(selected)}건 · 이월 {len(deferred)}건<br>수집원 오류·접근 보류 {failures}곳 · 본문 미수집 {missing}건 · 발췌·귀속 확인 {other_review}건</p>
-{''.join(cards)}<h2 style="font-size:18px;">본문·귀속 확인 필요</h2><ul>{unresolved or '<li>해당 없음</li>'}</ul>
+{cookie_html}{''.join(cards)}<h2 style="font-size:18px;">본문·귀속 확인 필요</h2><ul>{unresolved or '<li>해당 없음</li>'}</ul>
 <p style="font-size:12px;color:#667085;">보류는 정상으로 간주하지 않습니다. 비부정 상세 판정은 별도 검수 기록에 보관합니다. 답변은 자동 게시하지 않습니다.</p>
 </td></tr></table></td></tr></table></body></html>'''
 
@@ -517,3 +536,4 @@ def consume(queue, job_id):
         raise
     print(json.dumps({'job_id':job_id,'status':'verified','self_test':True,'smtp_accepted':1,
                       'production_recipients':0,'production_seen_writes':0,'paid_ai_calls':0}))
+
