@@ -35,7 +35,7 @@ jobs:
       - name: 수집 패키지·브라우저 설치
         if: steps.engine.outputs.value != 'paused'
         run: |
-          pip install requests playwright jsonschema
+          pip install requests playwright jsonschema pynacl
           playwright install --with-deps chromium
       - name: 네이버 쿠키 복원
         if: steps.engine.outputs.value != 'paused'
@@ -47,10 +47,21 @@ jobs:
           from pathlib import Path
           state=os.environ.get('NAVER_COOKIE_STATE','')
           if state:
-              json.loads(state)
               Path('naver_cookies.json').write_text(state)
               Path('naver_cookies.json').chmod(0o600)
           PY
+      - name: 수집 전 쿠키 점검·조건부 갱신 — API0
+        if: steps.engine.outputs.value == 'subscription' && inputs.dry_run != true
+        env:
+          NEGATIVE_QUEUE_TOKEN: ${{ secrets.NEGATIVE_QUEUE_TOKEN }}
+          NAVER_COOKIE_PROBES_JSON: ${{ secrets.NAVER_COOKIE_PROBES_JSON }}
+          COOKIE_AUTO_RENEW_ENABLED: ${{ vars.COOKIE_AUTO_RENEW_ENABLED }}
+          NAVER_ID: ${{ secrets.NAVER_ID }}
+          NAVER_PW: ${{ secrets.NAVER_PW }}
+          ADMIN_GITHUB_TOKEN: ${{ secrets.ADMIN_GITHUB_TOKEN }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PW: ${{ secrets.GMAIL_APP_PW }}
+        run: python refresh_cookies.py --mode auto
       - name: 구독 회차 수집 — API0·운영 발송0·이력 쓰기0
         if: steps.engine.outputs.value == 'subscription'
         env:
@@ -89,4 +100,4 @@ jobs:
         run: python negative_subscription.py notify-error
       - name: 로그인 쿠키 제거
         if: always()
-        run: rm -f naver_cookies.json
+        run: rm -f naver_cookies.json naver_cookie_status.json .naver_cookie_*

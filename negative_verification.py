@@ -19,6 +19,7 @@ import smtplib
 from urllib.parse import urlparse
 
 import jsonschema
+from cookie_auth import collector_auth
 
 from negative_queue import BOT_ID, JOB_ID, POLICY, PREFIX, REPOSITORY, digest, now
 
@@ -189,29 +190,30 @@ def collect(queue, fixture_id=None, production=False):
     with redirect_stdout(log_capture), sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         cookie_path = Path('naver_cookies.json')
-        cookie_loaded = cookie_path.exists()
+        try:
+            cookie_state = json.loads(cookie_path.read_text())
+        except (OSError, ValueError):
+            cookie_state = None
+        try:
+            cookie_report = json.loads(Path('naver_cookie_status.json').read_text())
+        except (OSError, ValueError):
+            cookie_report = None
+        cookie_loaded, cookie_auth_status, cookie_auth_verified = collector_auth(cookie_state, cookie_report)
         cookie_expiring = []
         if cookie_loaded:
             try:
                 limit = now().timestamp()
                 cookie_expiring = sorted({c['name'] for c in json.loads(cookie_path.read_text()).get('cookies', [])
-                    if c.get('name') in {'NID_AUT', 'NID_SES', 'nid_inf'} and limit < c.get('expires', -1) < limit+7*86400})
+                    if c.get('name') in {'NID_AUT', 'NID_SES'} and limit < c.get('expires', -1) < limit+7*86400})
             except (OSError, ValueError, TypeError, KeyError):
                 pass
         context = browser.new_context(storage_state=str(cookie_path)) if cookie_loaded else browser.new_context()
         page = context.new_page()
-        if cookie_loaded:
-            try:
-                page.goto('https://www.naver.com', wait_until='domcontentloaded', timeout=20000)
-                if 'nid.naver.com' in page.url:
-                    cookie_loaded = False
-                    context.close()
-                    context = browser.new_context()
-                    page = context.new_page()
-            except Exception:
-                cookie_loaded = False
         for cafe in module.CAFES:
             record = {'source': cafe['id'], 'name': cafe['name'], 'status': 'ok', 'listed': 0, 'unseen': 0, 'selected': 0}
+            if cafe.get('login_required', True):
+                record['auth_status'] = cookie_auth_status
+                record['auth_verified'] = cookie_auth_verified
             coverage.append(record)
             if not cookie_loaded and cafe.get('login_required', True):
                 record['status'] = 'cookie_required'
@@ -318,7 +320,8 @@ def collect(queue, fixture_id=None, production=False):
            'expires_at': (now()+timedelta(minutes=settings['job_ttl_minutes'])).isoformat(),
            'input': {'policy_version': POLICY, 'seen_hash': state_hash, 'items': list(by_id.values()),
                      'collection': {'coverage': coverage, 'historical': historical, 'cookie_loaded': cookie_loaded,
-                                    'cookie_expiring': cookie_expiring}},
+                                    'cookie_expiring': cookie_expiring, 'cookie_auth_status': cookie_auth_status,
+                                    'cookie_auth_verified': cookie_auth_verified}},
            'receipts': {}, 'paid_ai_calls': 0}
     job['input_hash'] = digest(job['input'])
     queue.put('jobs/'+job_id+'.json', job)
