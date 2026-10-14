@@ -1,4 +1,4 @@
-"""검수 전용 비공개 큐. 기사·게시글·주소·쿠키를 공개 저장소에 쓰지 않는다."""
+"""부정여론 검수·운영 비공개 큐. 원문·분석·주소·쿠키의 공개 저장을 금지한다."""
 import base64
 import hashlib
 import json
@@ -32,8 +32,10 @@ class Queue:
         if not self.token:
             raise RuntimeError('NEGATIVE_QUEUE_TOKEN 미설정 — 비공개 자료 저장 중단')
 
-    def request(self, suffix, method='GET', data=None):
-        request = urllib.request.Request('https://api.github.com/repos/' + REPOSITORY + suffix,
+    def request(self, suffix, method='GET', data=None, repository=REPOSITORY):
+        if repository not in {REPOSITORY, 'jinhoo-choi/cafe-monitor'}:
+            raise ValueError('허용된 큐·운영 저장소만 접근')
+        request = urllib.request.Request('https://api.github.com/repos/' + repository + suffix,
             data=json.dumps(data).encode() if data is not None else None,
             method=method, headers={'Authorization': 'Bearer ' + self.token,
                 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json',
@@ -63,6 +65,14 @@ class Queue:
         if not self.request('/git/ref/heads/main'):
             raise RuntimeError('비공개 검수 main 브랜치 없음')
 
+    def source(self, path):
+        if path not in {'negative_subscription_config.json', 'seen_posts.json'}:
+            raise ValueError('운영 설정·이력 읽기만 허용')
+        obj = self.request('/contents/'+path+'?ref=main', repository='jinhoo-choi/cafe-monitor')
+        if not obj or obj.get('type') != 'file':
+            raise RuntimeError('운영 설정·이력 읽기 실패')
+        return base64.b64decode(obj['content']), obj['sha']
+
     def get(self, path):
         if '..' in path or path.startswith('/'):
             raise ValueError('큐 경로 오류')
@@ -76,7 +86,7 @@ class Queue:
     def put(self, path, value, sha=None):
         if '..' in path or path.startswith('/'):
             raise ValueError('큐 경로 오류')
-        body = {'branch': 'main', 'message': 'chore: negative verification state [skip ci]',
+        body = {'branch': 'main', 'message': 'chore: negative subscription state [skip ci]',
                 'content': base64.b64encode(json.dumps(value, ensure_ascii=False, indent=2).encode()).decode()}
         if sha:
             body['sha'] = sha

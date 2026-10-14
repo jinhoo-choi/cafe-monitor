@@ -1,0 +1,59 @@
+name: 부정여론 구독 결과 소비
+on:
+  push:
+    branches: [main]
+    paths: [negative_subscription_request.json]
+permissions:
+  contents: write
+concurrency:
+  group: naver-cafe-monitor
+  cancel-in-progress: false
+jobs:
+  consume:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests playwright jsonschema
+      - name: 구독 분석 검증·기존 SMTP 접수
+        id: consume
+        env:
+          NEGATIVE_QUEUE_TOKEN: ${{ secrets.NEGATIVE_QUEUE_TOKEN }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PW: ${{ secrets.GMAIL_APP_PW }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+          EMAIL_CC: ${{ secrets.EMAIL_CC }}
+          CLAUDE_API_KEY: ''
+        run: python negative_subscription.py request
+      - name: 접수된 회차 처리 이력 push — 3회 재시도
+        if: steps.consume.outputs.ack_needed == 'true'
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add seen_posts.json
+          git diff --cached --quiet || git commit -m 'chore: negative subscription history [skip ci]'
+          for attempt in 1 2 3; do
+            git pull --rebase origin main || exit 1
+            if git push origin HEAD:main; then exit 0; fi
+            sleep $((attempt * 5))
+          done
+          exit 1
+      - name: main 이력 확인·비공개 완료 ACK
+        if: steps.consume.outputs.ack_needed == 'true'
+        env:
+          NEGATIVE_QUEUE_TOKEN: ${{ secrets.NEGATIVE_QUEUE_TOKEN }}
+          NEGATIVE_JOB_ID: ${{ steps.consume.outputs.job_id }}
+        run: |
+          export NEGATIVE_ACK_COMMIT=$(git rev-parse HEAD)
+          python negative_subscription.py ack "$NEGATIVE_JOB_ID"
+      - name: 오류 본인 알림 — 접수 메일 재발송 없음
+        if: failure()
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PW: ${{ secrets.GMAIL_APP_PW }}
+        run: python negative_subscription.py notify-error

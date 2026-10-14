@@ -1,6 +1,6 @@
 {
   "policy_version": "negative-subscription-v1",
-  "status": "verification_only",
+  "status": "production_ready",
   "goal": "기존 카페·블로그 수집과 SMTP를 유지하고 감성 판정·이슈 묶음·다발 답변의 유료 LLM API 호출을 모두 구독 분석으로 대체한다.",
   "collection": {
     "cafes": 14,
@@ -106,5 +106,5 @@
     "8/15/22시 자연 회차 3개에서 완료·수신자 영수증·API0·이월·수집 범위를 확인"
   ],
   "rollback": "부정여론 engine=paused로 해당 경로만 중지한다. 확실히 미발송인 회차만 취소하고 최신 seen을 보존한다. API 복귀는 비용 재발생을 알리고 명시적 결정으로만 수행한다.",
-  "production_enabled": false
+  "production_enabled": true
 }

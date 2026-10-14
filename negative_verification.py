@@ -146,12 +146,17 @@ def item(post_id, title, body, url, source, dataset, date_str='', previous_score
             'previous_score': previous_score, 'reference_run': reference_run}
 
 
-def collect(queue, fixture_id=None):
+def collect(queue, fixture_id=None, production=False):
     settings = config()
+    if production:
+        from negative_subscription import settings as production_settings
+        settings = production_settings(queue, live=True)
+        if fixture_id:
+            raise ValueError('운영 수집에 과거 검수 자료 혼입 금지')
     queue.preflight()
     seen, state_hash = seen_snapshot()
     run_id = os.environ.get('GITHUB_RUN_ID', now().strftime('%Y%m%dT%H%M%S'))
-    job_id = 'negative-verification-' + run_id
+    job_id = ('negative-production-' if production else 'negative-verification-') + run_id
     if not JOB_ID.fullmatch(job_id) or queue.get('jobs/'+job_id+'.json')[0] is not None:
         raise ValueError('검수 회차 ID 오류 또는 중복')
     fixtures = None
@@ -281,7 +286,9 @@ def collect(queue, fixture_id=None):
     _, after_hash = seen_snapshot()
     if after_hash != state_hash:
         raise RuntimeError('검수 수집 중 운영 이력 변경 감지')
-    job = {'schema_version': 1, 'bot_id': BOT_ID, 'mode': 'verification', 'self_test': True,
+    if production:
+        production_settings(queue, live=True)
+    job = {'schema_version': 1, 'bot_id': BOT_ID, 'mode': 'production' if production else 'verification', 'self_test': not production,
            'job_id': job_id, 'status': 'pending', 'created_at': now().isoformat(),
            'expires_at': (now()+timedelta(minutes=settings['job_ttl_minutes'])).isoformat(),
            'input': {'policy_version': POLICY, 'seen_hash': state_hash, 'items': list(by_id.values()),
@@ -300,11 +307,14 @@ def collect(queue, fixture_id=None):
                       'historical_sources': len(historical), 'paid_ai_calls': 0, 'smtp_calls': 0}))
 
 
-def validate(job, result):
+def validate(job, result, allow_production=False):
     config()
     if (job.get('schema_version') != 1 or job.get('bot_id') != BOT_ID
-            or job.get('mode') != 'verification' or job.get('self_test') is not True):
+            or not ((job.get('mode') == 'verification' and job.get('self_test') is True)
+                    or (allow_production and job.get('mode') == 'production' and job.get('self_test') is False))):
         raise ValueError('다른 봇 또는 운영 회차는 본인 검수 불가')
+    if job.get('mode') == 'production' and any(p.get('dataset') != 'live' for p in job['input']['items']):
+        raise ValueError('운영 입력에 과거 검수 자료 혼입 금지')
     if datetime.fromisoformat(job['expires_at']) <= now():
         raise ValueError('검수 입력 만료')
     if job['input'].get('policy_version') != POLICY or job['input_hash'] != digest(job['input']):
@@ -367,8 +377,8 @@ def selected_groups(result):
     return ordered[:bound], ordered[bound:]
 
 
-def render(job, result):
-    inputs, posts = validate(job, result)
+def render(job, result, production=False):
+    inputs, posts = validate(job, result, allow_production=production)
     selected, deferred = selected_groups(result)
     counts = {verdict: sum(p['verdict']==verdict for p in posts.values()) for verdict in ('negative','non_negative','needs_review')}
     esc = html.escape
@@ -383,7 +393,7 @@ def render(job, result):
         source, post = inputs[identifier], posts[identifier]
         label = '실제 과거 게시글 재검수' if source['dataset']=='historical' else '실제 최근 수집 게시글'
         previous = f" · 당시 로그 {source['previous_score']}점" if source.get('previous_score') is not None else ''
-        quotes = '<br>'.join('“'+esc(q['quote'])+'”' for q in post['evidence_quotes'])
+        quotes = '“'+esc(post['evidence_quotes'][0]['quote'])+'”'
         cards.append(f'''<table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #dce3eb;margin-bottom:18px;border-radius:8px;"><tr><td style="padding:18px;">
 <p style="font-size:12px;color:#697586;margin:0 0 8px;">{label}{esc(previous)} · 게시글 {len(group['member_post_ids'])}건(피해자 수 아님)</p>
 <h3 style="margin:0 0 10px;font-size:17px;"><a href="{esc(source['url'],quote=True)}" style="color:#24344b;">{esc(source['title'])}</a></h3>
@@ -392,19 +402,22 @@ def render(job, result):
 <p><b>내부 확인·대응</b><br>{esc(post['internal_action'])}</p>
 <p style="background:#f1f6fb;padding:12px;"><b>검토용 답변 초안 — 자동 게시 안 함</b><br>{esc(post['reply_draft'])}</p>
 <p style="font-size:12px;color:#667085;"><b>원문 근거</b><br>{quotes}</p></td></tr></table>''')
-    unresolved = ''.join(f"<li>{esc(inputs[p['post_id']]['title'])}<br>{esc(p['reason'])}<br>{esc(p['internal_action'])}</li>" for p in posts.values() if p['verdict']=='needs_review')
-    audit = ''.join(f"<tr><td style='padding:7px;border-bottom:1px solid #eee;'>{esc(inputs[p['post_id']]['title'])}</td><td>{esc(verdicts[p['verdict']])}</td><td>{esc(p['reason'])}</td></tr>" for p in posts.values() if p['verdict']!='negative')
+    unresolved = ''.join(f"<li style='margin-bottom:8px;'><a href='{esc(inputs[p['post_id']]['url'],quote=True)}'>{esc(inputs[p['post_id']]['title'])}</a><br>{esc(p['reason'])}</li>" for p in posts.values() if p['verdict']=='needs_review')
     coverage = job['input'].get('collection',{}).get('coverage',[])
     failures = sum(s['status']!='ok' for s in coverage)
+    missing = sum(inputs[p['post_id']]['body_status']!='collected' for p in posts.values() if p['verdict']=='needs_review')
+    other_review = counts['needs_review']-missing
+    badge = '부정여론 모니터링' if production else '[TEST] 본인 전용 · 운영 발송 0 · 운영 DB 쓰기 0'
+    heading = '부정여론 모니터링 결과' if production else '부정여론봇 개선안 실제 환경 검수'
+    intro = '작성자의 주장과 확인된 사실을 구분합니다. 답변 초안은 검토 후 사용하세요.' if production else '최근 수집과 과거 재검수 사례를 구분했습니다. 답변 초안은 검토용입니다.'
     return f'''<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="margin:0;background:#f3f5f8;font-family:Arial,sans-serif;color:#24344b;line-height:1.7;"><table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center"><table width="640" style="max-width:640px;width:100%;background:white;" cellpadding="22"><tr><td>
-<p style="font-size:12px;color:#356b50;">[TEST] 본인 전용 · 유료 AI API 0 · 운영 발송 0 · 운영 DB 쓰기 0</p>
-<h1 style="font-size:24px;">부정여론봇 개선안 실제 환경 검수</h1>
-<p>실제 최근 수집과 실제 과거 게시글을 구분한 검수입니다. 작성자의 주장과 사실 확인 여부를 구별하며 게시글 수를 피해자 수로 표현하지 않습니다.</p>
-<p><b>전체 {len(posts)}건 · 부정 {counts['negative']}건 · 비부정 {counts['non_negative']}건 · 확인 필요 {counts['needs_review']}건</b><br>메일 선정 이슈 {len(selected)}건 · 이월 {len(deferred)}건 · 수집 상태 확인 필요 {failures}곳</p>
+<p style="font-size:12px;color:#356b50;">{badge}</p>
+<h1 style="font-size:24px;">{heading}</h1>
+<p>{intro}</p>
+<p><b>전체 {len(posts)}건 · 부정 {counts['negative']}건 · 비부정 {counts['non_negative']}건 · 보류 {counts['needs_review']}건</b><br>선정 이슈 {len(selected)}건 · 이월 {len(deferred)}건<br>수집원 오류·접근 보류 {failures}곳 · 본문 미수집 {missing}건 · 발췌·귀속 확인 {other_review}건</p>
 {''.join(cards)}<h2 style="font-size:18px;">본문·귀속 확인 필요</h2><ul>{unresolved or '<li>해당 없음</li>'}</ul>
-<h2 style="font-size:18px;">비부정·보류 판정 근거</h2><table width="100%" style="font-size:12px;"><tr><th>원문 제목</th><th>판정</th><th>근거</th></tr>{audit}</table>
-<p style="font-size:12px;color:#667085;">회차 {esc(job['job_id'])} · 구독 분석 모델 {esc(result['model_used'])}<br>보류는 정상으로 간주하지 않습니다. 운영 전환과 게시글 자동 답변은 이번 검수 범위에 포함되지 않습니다.</p>
+<p style="font-size:12px;color:#667085;">보류는 정상으로 간주하지 않습니다. 비부정 상세 판정은 별도 검수 기록에 보관합니다. 답변은 자동 게시하지 않습니다.</p>
 </td></tr></table></td></tr></table></body></html>'''
 
 

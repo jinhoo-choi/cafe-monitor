@@ -1,69 +1,92 @@
 name: 네이버 카페 부정여론 모니터링
-
 on:
-  workflow_dispatch:          # cron-job.org 또는 수동 실행
+  workflow_dispatch:
     inputs:
       dry_run:
-        description: 'LLM 호출·메일 발송 없이 수집·필터만 검증 (비용 0)'
+        description: 'LLM 호출·메일·큐 쓰기 없이 검증'
         type: boolean
         default: false
-
 permissions:
   contents: write
-
 concurrency:
   group: naver-cafe-monitor
-  cancel-in-progress: false   # 실행 중 작업 강제 종료 방지 (DB 안전)
-
+  cancel-in-progress: false
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 30       # 무한 루프 / 블로킹 방지
-
+    timeout-minutes: 30
     steps:
       - name: 코드 체크아웃
         uses: actions/checkout@v4
-
-      - name: Python 설치
-        uses: actions/setup-python@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      - name: 패키지 설치
+      - name: 운영 엔진 확인
+        id: engine
         run: |
-          python -m pip install --upgrade pip
-          pip install requests playwright
-          playwright install chromium
-          playwright install-deps chromium
-
+          python - <<'PY'
+          import json,os
+          value=json.load(open('negative_subscription_config.json'))['engine']
+          if value not in {'api','subscription','paused'}: raise ValueError('engine')
+          with open(os.environ['GITHUB_OUTPUT'],'a') as output: output.write('value='+value+'\n')
+          PY
+      - name: 수집 패키지·브라우저 설치
+        if: steps.engine.outputs.value != 'paused'
+        run: |
+          pip install requests playwright jsonschema
+          playwright install --with-deps chromium
       - name: 네이버 쿠키 복원
-        run: |
-          cat > naver_cookies.json <<'EOF'
-          ${{ secrets.NAVER_COOKIES_JSON }}
-          EOF
-
-      # 모니터링 실행 - workflow_dispatch(cron-job.org)일 때만
-      - name: 모니터링 실행
-        if: github.event_name == 'workflow_dispatch'
+        if: steps.engine.outputs.value != 'paused'
         env:
-          GMAIL_USER:     ${{ secrets.GMAIL_USER }}
-          GMAIL_APP_PW:   ${{ secrets.GMAIL_APP_PW }}
-          NOTIFY_EMAIL:   ${{ secrets.NOTIFY_EMAIL }}
-          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
-          EMAIL_CC:       ${{ secrets.EMAIL_CC }}
-          DRY_RUN:        ${{ inputs.dry_run && '1' || '' }}
-        run: python monitor.py
-
-      - name: DB 변경사항 커밋
-        if: github.event_name == 'workflow_dispatch'
+          NAVER_COOKIE_STATE: ${{ secrets.NAVER_COOKIES_JSON }}
         run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add seen_posts.json || true
-          git diff --cached --quiet || git commit -m "update seen_posts.json"
-          # push 재시도: 동시 push로 non-fast-forward 실패 시 다음 실행이 중복 처리하는 것을 방지
-          for i in 1 2 3; do
-            git pull --rebase -q origin main || true
-            git push origin main && break
-            sleep $((i * 5))
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          state=os.environ.get('NAVER_COOKIE_STATE','')
+          if state:
+              json.loads(state)
+              Path('naver_cookies.json').write_text(state)
+              Path('naver_cookies.json').chmod(0o600)
+          PY
+      - name: 구독 회차 수집 — API0·운영 발송0·이력 쓰기0
+        if: steps.engine.outputs.value == 'subscription'
+        env:
+          NEGATIVE_QUEUE_TOKEN: ${{ secrets.NEGATIVE_QUEUE_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+          CLAUDE_API_KEY: ''
+        run: python negative_subscription.py collect
+      - name: 명시적 API 모드 운영
+        if: steps.engine.outputs.value == 'api'
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PW: ${{ secrets.GMAIL_APP_PW }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+          EMAIL_CC: ${{ secrets.EMAIL_CC }}
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+        run: python monitor.py
+      - name: 명시적 API 모드 이력 저장
+        if: steps.engine.outputs.value == 'api'
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add seen_posts.json
+          git diff --cached --quiet || git commit -m 'update seen_posts.json'
+          for attempt in 1 2 3; do
+            git pull --rebase origin main || exit 1
+            if git push origin HEAD:main; then exit 0; fi
+            sleep $((attempt * 5))
           done
+          exit 1
+      - name: 구독 오류 본인 알림
+        if: failure() && steps.engine.outputs.value == 'subscription' && inputs.dry_run != true
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PW: ${{ secrets.GMAIL_APP_PW }}
+        run: python negative_subscription.py notify-error
+      - name: 로그인 쿠키 제거
+        if: always()
+        run: rm -f naver_cookies.json

@@ -16,6 +16,7 @@ import random
 import time
 import urllib.parse
 import requests
+from pathlib import Path
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.utils import formataddr, formatdate, make_msgid
@@ -47,6 +48,12 @@ DRY_RUN = os.getenv("DRY_RUN", "") == "1"
 API_STATS = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "delivered": 0}
 PRICE_IN_PER_MTOK  = float(os.getenv("PRICE_IN_PER_MTOK",  "3"))
 PRICE_OUT_PER_MTOK = float(os.getenv("PRICE_OUT_PER_MTOK", "15"))
+
+
+def _require_paid_engine():
+    path = Path('negative_subscription_config.json')
+    if path.exists() and json.loads(path.read_text()).get('engine') != 'api':
+        raise RuntimeError('구독·일시정지 모드에서 유료 API 호출 금지')
 
 
 def _track_usage(resp):
@@ -768,6 +775,7 @@ def get_post_detail(page, post_url, cafe_id):
     return body[:2000], body
 
 def analyze_sentiment(title, body, keyword):
+    _require_paid_engine()
     prompt = f"""다음은 네이버 카페 게시글입니다.
 이 게시글이 '한국투자증권(한투/뱅키스/BanKIS)' 자체에 대한 불만·비판·리스크인지 판단하고, 3줄 이내로 요약해주세요.
 
@@ -1047,6 +1055,7 @@ def build_card(post, idx, total):
 
 
 def regenerate_widespread_reply(title, count):
+    _require_paid_engine()
     """동일 이슈가 3건 이상 동시 감지됐을 때, 개인 경험(저는 되는데요) 기반 안심성 답변 대신
     다수 발생 중임을 인지한 답변으로 교체."""
     prompt = f"""아래는 네이버 카페/블로그에서 최근 짧은 시간 내 동시에 {count}건 감지된 동일 이슈 게시글입니다.
@@ -1100,6 +1109,7 @@ reply 작성 규칙 (같은 카페를 보는 일반 회원 톤, 편한 존댓말
 
 
 def group_similar_alerts(alert_posts):
+    _require_paid_engine()
     """Claude AI가 유사 이슈 여부를 판단해서 묶음 처리"""
     if len(alert_posts) <= 1:
         return alert_posts, []
@@ -1739,7 +1749,17 @@ def main():
     log("모니터링 완료")
 
 if __name__ == "__main__":
-    main()
+    if Path('negative_subscription_config.json').exists():
+        import negative_subscription as subscription
+        engine = subscription.settings()['engine']
+        if engine == 'api':
+            main()
+        elif engine == 'subscription':
+            subscription.collect(subscription.Queue())
+        else:
+            print('부정여론 구독 일시정지; 발송0/API0')
+    else:
+        main()
 
 
 
