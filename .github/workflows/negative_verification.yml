@@ -52,7 +52,7 @@ jobs:
         run: git show origin/main:seen_posts.json > /tmp/negative_production_seen.json
       - name: 연결·수집 또는 본인 테스트메일
         env:
-          NEGATIVE_QUEUE_TOKEN: ${{ secrets.ADMIN_GITHUB_TOKEN }}
+          NEGATIVE_QUEUE_TOKEN: ${{ secrets.NEGATIVE_QUEUE_TOKEN }}
           NEGATIVE_SEEN_PATH: /tmp/negative_production_seen.json
           TEST_MODE: '1'
           GMAIL_USER: ${{ secrets.GMAIL_USER }}

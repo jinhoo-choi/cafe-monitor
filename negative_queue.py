@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -37,13 +38,23 @@ class Queue:
             method=method, headers={'Authorization': 'Bearer ' + self.token,
                 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json',
                 'X-GitHub-Api-Version': '2022-11-28'})
-        try:
-            with urllib.request.urlopen(request, timeout=30) as response:
-                return json.load(response)
-        except urllib.error.HTTPError as error:
-            if error.code == 404 and method == 'GET':
-                return None
-            raise RuntimeError(f'비공개 큐 {method} HTTP {error.code}') from None
+        attempts = 3 if method == 'GET' else 1
+        for attempt in range(attempts):
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    return json.load(response)
+            except urllib.error.HTTPError as error:
+                if error.code == 404 and method == 'GET':
+                    return None
+                if error.code in {429, 500, 502, 503, 504} and attempt+1 < attempts:
+                    time.sleep(attempt+1)
+                    continue
+                raise RuntimeError(f'비공개 큐 {method} HTTP {error.code}') from None
+            except urllib.error.URLError:
+                if attempt+1 < attempts:
+                    time.sleep(attempt+1)
+                    continue
+                raise RuntimeError('비공개 큐 네트워크 실패 — 쓰기 자동 재시도 없음') from None
 
     def preflight(self):
         repository = self.request('')

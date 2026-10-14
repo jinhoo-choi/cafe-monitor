@@ -1,0 +1,272 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "부정여론 구독 분석 본인 검수",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "bot_id",
+    "policy_version",
+    "job_id",
+    "input_hash",
+    "analysis_engine",
+    "model_used",
+    "posts",
+    "groups"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "bot_id": {
+      "const": "negative_monitor"
+    },
+    "policy_version": {
+      "const": "negative-subscription-v1"
+    },
+    "job_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,80}$"
+    },
+    "input_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "analysis_engine": {
+      "const": "chatgpt_subscription"
+    },
+    "model_used": {
+      "type": "string",
+      "minLength": 1
+    },
+    "posts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "post_id",
+          "verdict",
+          "reason",
+          "company_attribution",
+          "claim_status",
+          "score",
+          "urgency",
+          "category",
+          "summary",
+          "internal_action",
+          "reply_draft",
+          "evidence_quotes",
+          "reviewed"
+        ],
+        "properties": {
+          "post_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "verdict": {
+            "enum": [
+              "negative",
+              "non_negative",
+              "needs_review"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          },
+          "company_attribution": {
+            "enum": [
+              "KIS",
+              "other",
+              "ambiguous"
+            ]
+          },
+          "claim_status": {
+            "enum": [
+              "user_claim",
+              "news_share",
+              "resolved_report",
+              "unverified",
+              "not_applicable"
+            ]
+          },
+          "score": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 10
+          },
+          "urgency": {
+            "enum": [
+              "high",
+              "normal",
+              "watch"
+            ]
+          },
+          "category": {
+            "enum": [
+              "app_access",
+              "order_execution",
+              "withdrawal_settlement",
+              "fees",
+              "customer_support",
+              "security",
+              "company_reputation",
+              "neutral_other",
+              "unresolved"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 240
+          },
+          "internal_action": {
+            "type": "string",
+            "maxLength": 180
+          },
+          "reply_draft": {
+            "type": "string",
+            "maxLength": 240
+          },
+          "evidence_quotes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "field",
+                "quote"
+              ],
+              "properties": {
+                "field": {
+                  "enum": [
+                    "title",
+                    "body_excerpt"
+                  ]
+                },
+                "quote": {
+                  "type": "string",
+                  "minLength": 8,
+                  "maxLength": 180
+                }
+              }
+            }
+          },
+          "reviewed": {
+            "type": "boolean"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "verdict": {
+                  "const": "non_negative"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "score": {
+                  "const": 0
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "verdict": {
+                  "const": "needs_review"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "score": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "verdict": {
+                  "const": "negative"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "score": {
+                  "type": "number",
+                  "minimum": 1,
+                  "maximum": 10
+                },
+                "company_attribution": {
+                  "const": "KIS"
+                },
+                "evidence_quotes": {
+                  "minItems": 1
+                },
+                "summary": {
+                  "minLength": 1
+                },
+                "internal_action": {
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "groups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "group_id",
+          "issue_key",
+          "member_post_ids",
+          "representative_post_id",
+          "group_reason"
+        ],
+        "properties": {
+          "group_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "issue_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "member_post_ids": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "representative_post_id": {
+            "type": "string"
+          },
+          "group_reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          }
+        }
+      }
+    }
+  }
+}
