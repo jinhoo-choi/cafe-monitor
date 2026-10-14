@@ -10,7 +10,7 @@ CORE = {'NID_AUT', 'NID_SES'}
 BODY_SELECTOR = '.se-main-container, .article-viewer, .ContentRenderer, #tbody, .article_body'
 CHALLENGES = ('자동입력 방지', '보안문자', '휴대전화 인증', '본인 확인', '2단계 인증', '비정상적인 접근')
 LOGIN_HINTS = ('로그인이 필요', '로그인 후 이용', '로그인해 주세요', '로그인해주세요')
-MEMBER_HINTS = ('카페 멤버만', '카페 회원만', '가입한 멤버만', '멤버만 볼 수')
+MEMBER_HINTS = ('카페 멤버만', '카페 회원만', '가입한 멤버만', '멤버만 볼 수', '카페에 가입된 회원만')
 PERMISSION_HINTS = ('등급 이상', '읽기 권한', '접근 권한', '게시글이 삭제', '삭제된 게시글')
 
 
@@ -65,10 +65,13 @@ def readable(text):
     return len(re.findall(r'[가-힣A-Za-z0-9]', text)) >= 30
 
 
-def page_status(page, url):
+def page_status(page, url, diagnostic=None):
     """A public homepage or HTTP 200 never proves authenticated access."""
     try:
         response = page.goto(url, wait_until='domcontentloaded', timeout=12000)
+        if diagnostic is not None:
+            diagnostic['http_status'] = response.status if response is not None else None
+            diagnostic['final_host'] = urlparse(page.url).hostname
         if response is None or response.status >= 400:
             return 'unknown'
         try:
@@ -77,12 +80,18 @@ def page_status(page, url):
             pass
         frames = [f for f in page.frames if urlparse(f.url).hostname in {
             'cafe.naver.com', 'ca-fe.naver.com', 'nid.naver.com'}]
+        if diagnostic is not None:
+            diagnostic['frame_hosts'] = sorted({urlparse(f.url).hostname for f in page.frames if urlparse(f.url).hostname})
         target = re.search(r'/cafes/(\d+)/articles/(\d+)', urlparse(url).path)
         for frame in frames:
             if target and not re.search(r'/cafes/' + target[1] + r'/articles/' + target[2] + r'(?:[/?#]|$)', frame.url):
                 continue
             if not target and urlparse(frame.url).path != urlparse(url).path:
                 continue
+            try:
+                frame.wait_for_selector(BODY_SELECTOR, timeout=4000)
+            except Exception:
+                pass
             for element in frame.query_selector_all(BODY_SELECTOR):
                 if readable(element.inner_text()):
                     return 'body'
@@ -90,6 +99,9 @@ def page_status(page, url):
         if 'nidlogin' in urlparse(page.url).path:
             return 'auth_required'
         texts = [frame.inner_text('body')[:12000] for frame in frames]
+        if diagnostic is not None:
+            diagnostic['wall_markers'] = [label for label in ('로그인', '가입', '권한', '삭제', '오류', '접근', '멤버', '인증')
+                                          if any(label in text for text in texts)]
         if any(any(h in text for h in CHALLENGES) for text in texts):
             return 'human_required'
         if any(any(h in text for h in PERMISSION_HINTS) for text in texts):
@@ -98,8 +110,9 @@ def page_status(page, url):
             return 'auth_required'
         if any(any(h in text for h in MEMBER_HINTS) for text in texts):
             return 'member_required'
-    except Exception:
-        pass
+    except Exception as error:
+        if diagnostic is not None:
+            diagnostic['error_type'] = type(error).__name__
     return 'unknown'
 
 
@@ -109,9 +122,11 @@ def access_status(browser, state, urls, checks=None):
     anonymous = browser.new_context()
     try:
         page = anonymous.new_page()
-        gates = [page_status(page, url) for url in urls]
+        details = [{}, {}]
+        gates = [page_status(page, url, diagnostic=detail) for url, detail in zip(urls, details)]
         if checks is not None:
             checks['anonymous'] = gates
+            checks['anonymous_details'] = details
     finally:
         anonymous.close()
     # Each probe must independently fail without a cookie; public/removed/unknown posts are insufficient.
@@ -122,9 +137,11 @@ def access_status(browser, state, urls, checks=None):
     authenticated = browser.new_context(storage_state=state)
     try:
         page = authenticated.new_page()
-        results = [page_status(page, url) for url in urls]
+        details = [{}, {}]
+        results = [page_status(page, url, diagnostic=detail) for url, detail in zip(urls, details)]
         if checks is not None:
             checks['authenticated'] = results
+            checks['authenticated_details'] = details
     finally:
         authenticated.close()
     if results == ['body', 'body']:
