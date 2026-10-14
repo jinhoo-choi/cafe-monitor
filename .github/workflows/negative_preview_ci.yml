@@ -1,0 +1,30 @@
+name: 부정여론 개선안 오프라인 검수
+on:
+  push:
+    branches: [codex/negative-subscription-verification]
+    paths: ['negative_*.py','negative_*.json','test_negative_*.py','monitor.py','.github/workflows/*.yml']
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests playwright jsonschema pyyaml
+      - run: python -m py_compile negative_queue.py negative_verification.py negative_verification_request.py negative_subscription.py monitor.py
+      - name: 메일·상태·비용·원문 검증 오프라인 회귀
+        run: python -m unittest -v test_negative_verification test_negative_subscription
+      - name: JSON Schema·워크플로 검증
+        run: |
+          python - <<'PY'
+          import json,jsonschema,yaml,glob
+          jsonschema.Draft202012Validator.check_schema(json.load(open('negative_result_schema.json')))
+          for path in glob.glob('.github/workflows/*.yml'):
+              with open(path) as f: yaml.safe_load(f)
+          print('schema and yaml valid')
+          PY

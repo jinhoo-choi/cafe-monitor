@@ -1,0 +1,11 @@
+{
+  "engine": "subscription",
+  "bot_id": "negative_monitor",
+  "policy_version": "negative-subscription-v1",
+  "queue_repository": "jinhoo-choi/insight-bot-data",
+  "queue_prefix": "subscription/negative",
+  "job_ttl_minutes": 120,
+  "max_email_groups": 30,
+  "production_enabled": true,
+  "paid_api_fallback": false
+}

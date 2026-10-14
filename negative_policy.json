@@ -1,0 +1,110 @@
+{
+  "policy_version": "negative-subscription-v1",
+  "status": "production_ready",
+  "goal": "기존 카페·블로그 수집과 SMTP를 유지하고 감성 판정·이슈 묶음·다발 답변의 유료 LLM API 호출을 모두 구독 분석으로 대체한다.",
+  "collection": {
+    "cafes": 14,
+    "sources": [
+      "naver_cafe",
+      "naver_blog"
+    ],
+    "window_hours": 24,
+    "current_kst": [
+      "08:00",
+      "15:00",
+      "22:00"
+    ],
+    "proposed_analysis_kst": [
+      "08:10",
+      "15:10",
+      "22:10"
+    ],
+    "body_policy": "전체 본문으로 대상 언급을 확인하고, 제목·핵심 문단·불만 근처 문단을 개인정보 마스킹 후 입력한다. 추출 길이·잘림 여부를 기록한다.",
+    "aliases": [
+      "한국투자증권",
+      "한투",
+      "뱅키스",
+      "BanKIS"
+    ],
+    "hint_matching": "입력과 힌트를 casefold로 정규화한다. 단축명 한투는 신한투자증권·대한투자증권 이름에 포함된 글자를 자사로 귀속하지 않는다. 힌트는 판정이 아닌 선별 보조다.",
+    "credentials": "네이버 로그인 쿠키는 기존 Actions Secret에 유지하고 모델 입력·큐에 넣지 않는다."
+  },
+  "classification": {
+    "verdicts": [
+      "negative",
+      "non_negative",
+      "needs_review"
+    ],
+    "negative": "한국투자증권 서비스·응대·수수료·신뢰에 대한 구체적인 불만 또는 회사 관련 사건 공유. 작성자 주장과 사실 확인 여부를 구별한다.",
+    "non_negative": "명백한 중립·홍보·단순 문의·시장 손실·타사 및 별도 계열사 불만. score=0.",
+    "needs_review": "본문 미수집·공백/보이지 않는 문자뿐인 본문·대상/귀책/원문 불명확·분석 실패는 score=null로 보류한다. 정상 또는 부정 확정으로 처리하지 않는다.",
+    "brand_impersonation": "회사 서비스 귀책과 분리한 보안 확인 대상으로 기록한다. 법률 상담 광고와 실제 피해 호소를 구별한다.",
+    "evidence": "부정 판정에는 입력에 있는 연속 인용 8자 이상과 근거를 요구한다. 마스킹 자리표시자를 인용 근거로 삼지 않는다."
+  },
+  "score": {
+    "range": [
+      0,
+      10
+    ],
+    "threshold": 1,
+    "bands": {
+      "1-3": "경미한 불편",
+      "4-6": "명확한 불만·반복 오류·금전 피해 주장",
+      "7-10": "다수 발생 정황·강한 비판·중대 신뢰 사안"
+    },
+    "urgency": "감성 점수와 분리한다. 현재 주문·출금·정보보호 문제는 낮은 점수라도 우선 확인할 수 있으며 확정 피해로 표현하지 않는다."
+  },
+  "writing": {
+    "summary": "작성자 주장·발생 서비스/시점·확인 상태를 보존한다. 2~3문장, 120~180자 권장·최대 240자. 근거가 적으면 억지로 늘리지 않는다.",
+    "internal_action": "구체적인 사실 확인 항목과 다음 조치를 두 문장으로 작성한다. 임의 수치·담당 부서·기한을 만들지 않는다.",
+    "reply_draft": "현재의 편한 존댓말은 유지하되 직접 겪지 않은 개인 경험, 회사 입장, 정상 작동 확인을 지어내지 않는다. 기술 불편 1~2문장, 금융 구조 설명 2~3문장. 게시글에 자동 등록하지 않고 메일의 검토용 초안으로 표시한다.",
+    "phone_whitelist": [
+      "1544-5000"
+    ],
+    "forbidden": [
+      "저는 정상입니다(미확인 경험)",
+      "저도 피해자입니다(미확인 경험)",
+      "이미 해결됐습니다(미확인 상태)",
+      "입력에 없는 앱 메뉴·피해 금액·확정 원인"
+    ]
+  },
+  "grouping": {
+    "basis": [
+      "문제 서비스",
+      "발생 시점",
+      "증상",
+      "본문 근거"
+    ],
+    "not_title_only": true,
+    "count_unit": "원본 게시글 수와 재게시 수를 구분한다. 게시글 3건을 피해자 3명으로 바꾸지 않는다.",
+    "all_negative_ids_exactly_once": true,
+    "max_email_groups": 30,
+    "overflow": "30개 초과 이슈는 비공개 이월 큐로 보존하고 발송 완료 이력에 넣지 않는다."
+  },
+  "state": {
+    "collection_does_not_mark_delivery": true,
+    "terminal_non_negative": "명확한 비부정 제외는 이유와 판정 버전을 기록한다.",
+    "needs_review_retry": "접근/본문 실패는 다음 회차 재수집 후보로 유지한다. 반복 실패는 보류 원인과 시도 횟수를 표시한다.",
+    "smtp": "수신자별 sending 선기록→accepted/rejected/uncertain 영수증. accepted 수신자 재발송 금지; uncertain은 자동 재시도하지 않는다.",
+    "completion": "의도한 수신자 접수와 seen 저장/ack 증거를 갖춘 회차만 completed로 종결한다.",
+    "db": "seen_posts.json 파싱 실패는 빈 DB로 대체하지 않는다. 원자적 저장과 처리 이력 해시를 사용한다."
+  },
+  "private_queue": {
+    "proposed_repository": "jinhoo-choi/insight-bot-data",
+    "proposed_prefix": "subscription/negative",
+    "bot_id": "negative_monitor",
+    "source_repository": "jinhoo-choi/cafe-monitor",
+    "secret_needed": "NEGATIVE_QUEUE_TOKEN",
+    "privacy": "개인 식별 정보는 입력 전 마스킹하고 원문·분석·주소 상세·영수증을 비공개로 저장한다. 공개 로그와 깨우기 파일에는 회차·상태·건수만 남긴다."
+  },
+  "rollout": [
+    "현 운영 API 유지, 코드·정책 스냅샷과 이력 보존",
+    "3개 API 경로를 provider 입력으로 분리하고 발송/이력 문제부터 오프라인 검수",
+    "허용된 실제 과거 게시글을 비공개로 수집해 구독 판정·문구 비교",
+    "본인 전용 self_test=true 실제 SMTP 검수; 그룹 수신자 0·seen 변경0·API0",
+    "검토 후 별도 최종 승인으로 부정여론 경로만 활성화",
+    "8/15/22시 자연 회차 3개에서 완료·수신자 영수증·API0·이월·수집 범위를 확인"
+  ],
+  "rollback": "부정여론 engine=paused로 해당 경로만 중지한다. 확실히 미발송인 회차만 취소하고 최신 seen을 보존한다. API 복귀는 비용 재발생을 알리고 명시적 결정으로만 수행한다.",
+  "production_enabled": true
+}
