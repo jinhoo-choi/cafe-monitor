@@ -344,6 +344,8 @@ def render(job, result, inputs, posts, selected, deferred, production=False):
         notices.append('네이버 로그인 쿠키 확인 필요 — NAVER_COOKIES_JSON 재등록 필요')
     elif collection.get('cookie_expiring'):
         notices.append('네이버 쿠키 7일 내 만료 예정(' + ', '.join(collection['cookie_expiring']) + ') — 재등록 준비')
+    if collection.get('cookie_auth_status') and collection.get('cookie_auth_verified') is not True:
+        notices.append('회원 전용 본문 인증 미확인 — 쿠키 이름 존재나 공개 홈 접근을 정상 인증으로 간주하지 않습니다.')
     if deferred:
         notices.append(f'이월 이슈 {len(deferred)}건 — 다음 회차 확인 대상입니다.')
     alerts = []
