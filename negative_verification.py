@@ -77,25 +77,37 @@ def mask(text):
 
 
 def excerpt(body, limit=4000):
+    if limit <= 0:
+        raise ValueError('본문 발췌 한도는 양수여야 함')
     text = mask(body)
     if len(text) <= limit:
         return text
-    # 첫 문단만 자르지 않고 대상 회사/불만 근처 문단과 끝부분을 보존한다.
-    spans = [(0, 1000), (max(0, len(text)-400), len(text))]
-    hints = (*ALIASES, '주문', '출금', '수수료', '불만', '오류', '사기', '보상', 'MTS', 'HTS')
+    # 대상 회사 문단을 먼저 확보한다. 위치 정렬 후 끝을 자르면 뒤쪽 회사 문단이 사라진다.
+    candidates = []
     folded = text.casefold()
-    for hint in hints:
+    before, after = min(220, limit//3), min(420, limit-min(220, limit//3))
+    for hint in ALIASES:
         start = folded.find(hint.casefold())
         if start >= 0:
-            spans.append((max(0, start-220), min(len(text), start+420)))
-    spans.sort()
+            candidates.append((max(0, start-before), min(len(text), start+after)))
+    candidates += [(0, min(1000, limit)), (max(0, len(text)-min(400, limit)), len(text))]
+    for hint in ('주문', '출금', '수수료', '불만', '오류', '사기', '보상', 'MTS', 'HTS'):
+        start = folded.find(hint.casefold())
+        if start >= 0:
+            candidates.append((max(0, start-before), min(len(text), start+after)))
+    separator = '\n[중간 생략]\n'
     merged = []
-    for lo, hi in spans:
-        if merged and lo <= merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(hi, merged[-1][1]))
-        else:
-            merged.append((lo, hi))
-    return '\n[중간 생략]\n'.join(text[lo:hi] for lo, hi in merged)[:limit]
+    for candidate in candidates:
+        combined = []
+        for lo, hi in sorted(merged+[candidate]):
+            if combined and lo <= combined[-1][1]:
+                combined[-1] = (combined[-1][0], max(hi, combined[-1][1]))
+            else:
+                combined.append((lo, hi))
+        size = sum(hi-lo for lo, hi in combined) + len(separator)*(len(combined)-1)
+        if size <= limit:
+            merged = combined
+    return separator.join(text[lo:hi] for lo, hi in merged)
 
 
 def valid_url(url):
@@ -311,6 +323,9 @@ def validate(job, result):
             raise ValueError('검수 원문 URL 오류')
         if source['body_status'] != 'collected' and post['verdict'] != 'needs_review':
             raise ValueError('본문 미확보는 확인필요로 보류')
+        visible_target = any(a.casefold() in (source['title']+' '+source['body_excerpt']).casefold() for a in ALIASES)
+        if source.get('target_present') and not visible_target and post['verdict'] != 'needs_review':
+            raise ValueError('대상 언급 문단 누락은 확인필요로 보류')
         score = post['score']
         if score is not None and (type(score) not in {int,float} or not math.isfinite(score)):
             raise ValueError('유한한 점수만 허용')

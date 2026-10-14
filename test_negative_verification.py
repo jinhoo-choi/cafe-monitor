@@ -237,6 +237,25 @@ class VerificationRegression(unittest.TestCase):
         self.assertLessEqual(len(excerpt),4000)
         self.assertIn('한국투자증권 MTS 주문 오류',excerpt)
 
+    def test_excerpt_budget_keeps_target_after_many_earlier_hint_windows(self):
+        prefix=''.join(h+' 설명. '+'일반문장 '*250 for h in ('주문','출금','수수료','불만','오류','사기','보상','MTS','HTS'))
+        for claim in ('한국투자증권 룰렛 당첨 경품이 표시와 다릅니다.', 'bAnKiS 주문 접수가 반복해서 실패합니다.'):
+            with self.subTest(claim=claim):
+                excerpt=bot.excerpt(prefix+claim+' 맺음말.'*150)
+                self.assertLessEqual(len(excerpt),4000)
+                self.assertIn(claim,excerpt)
+
+    def test_target_flag_without_visible_company_requires_review(self):
+        source=self.job['input']['items'][0]
+        source.update(title='시장 자료 모음',body_excerpt='앱에서 주문이 반복해서 실패한다는 글입니다.',target_present=True)
+        self.job['input_hash']=queue_module.digest(self.job['input'])
+        self.result['input_hash']=self.job['input_hash']
+        with self.assertRaisesRegex(ValueError,'대상 언급 문단 누락'):
+            bot.validate(self.job,self.result)
+        self.result['posts'][0].update(verdict='needs_review',score=None,urgency='watch',category='unresolved',evidence_quotes=[])
+        self.result['groups']=[]
+        bot.validate(self.job,self.result)
+
     def test_pii_redaction_preserves_service_facts(self):
         text=bot.mask('한국투자증권 MTS 오류. a@b.com 010-1234-5678 123-12-123456 https://private.invalid/data')
         self.assertIn('한국투자증권 MTS 오류',text)
