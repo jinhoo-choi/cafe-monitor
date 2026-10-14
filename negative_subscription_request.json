@@ -1,1 +1,7 @@
-{"operation":"noop","request_id":"negative-subscription-initial"}
+{
+  "operation": "consume",
+  "job_id": "negative-production-38519708763",
+  "self_test": false,
+  "dry_run": false,
+  "request_id": "negative-production-38519708763-20261014062205-77cf5fc"
+}
