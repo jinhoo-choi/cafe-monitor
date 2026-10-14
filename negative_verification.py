@@ -27,6 +27,23 @@ MASKS = ('[이메일]', '[연락처]', '[계좌]', '[주민번호]', '[외부주
 ALIASES = ('한국투자증권', '한투', '뱅키스', 'BanKIS')
 
 
+def brand_present(text):
+    folded = text.casefold()
+    return ('한국투자증권' in folded or '뱅키스' in folded
+            or re.search(r'(?<![A-Za-z])bankis(?![A-Za-z])',folded) is not None
+            or re.search(r'(?<![가-힣A-Za-z])한투',text) is not None)
+
+
+def readable_body(text):
+    for marker in MASKS:
+        text = text.replace(marker,'')
+    return re.search(r'[A-Za-z0-9가-힣]',text) is not None
+
+
+def body_available(source):
+    return source['body_status'] == 'collected' and readable_body(source['body_excerpt'])
+
+
 def config():
     value = json.loads(Path('negative_verification_config.json').read_text())
     if (value.get('engine') != 'verification_only' or value.get('production_enabled') is not False
@@ -138,11 +155,11 @@ def item(post_id, title, body, url, source, dataset, date_str='', previous_score
         raise ValueError('실제 게시글 URL 형식 오류')
     text = excerpt(body)
     return {'post_id': post_id, 'title': mask(title), 'body_excerpt': text,
-            'body_status': 'collected' if body.strip() else 'missing', 'url': url,
+            'body_status': 'collected' if readable_body(text) else 'missing', 'url': url,
             'source': source, 'dataset': dataset, 'published_at': published(date_str),
             'date_raw': date_str, 'body_original_chars': len(body), 'body_excerpt_chars': len(text),
             'body_truncated': len(mask(body)) > len(text),
-            'target_present': any(a.casefold() in (title+' '+body).casefold() for a in ALIASES),
+            'target_present': brand_present(title+' '+body),
             'previous_score': previous_score, 'reference_run': reference_run}
 
 
@@ -331,7 +348,7 @@ def validate(job, result, allow_production=False):
         source = inputs[identifier]
         if not valid_url(source['url']):
             raise ValueError('검수 원문 URL 오류')
-        if source['body_status'] != 'collected' and post['verdict'] != 'needs_review':
+        if not body_available(source) and post['verdict'] != 'needs_review':
             raise ValueError('본문 미확보는 확인필요로 보류')
         visible_target = any(a.casefold() in (source['title']+' '+source['body_excerpt']).casefold() for a in ALIASES)
         if source.get('target_present') and not visible_target and post['verdict'] != 'needs_review':
@@ -341,7 +358,7 @@ def validate(job, result, allow_production=False):
             raise ValueError('유한한 점수만 허용')
         if ((score is not None and score >= 7) or post['urgency'] == 'high') and post['reviewed'] is not True:
             raise ValueError('높은 강도·긴급 사안 검토 미완료')
-        if post['verdict'] == 'negative' and not source.get('target_present'):
+        if post['verdict'] == 'negative' and (not source.get('target_present') or not brand_present(source['title']+' '+source['body_excerpt'])):
             raise ValueError('한국투자증권 실제 언급 없음')
         for evidence in post['evidence_quotes']:
             if evidence['quote'] not in source[evidence['field']] or any(m in evidence['quote'] for m in MASKS):
@@ -405,7 +422,7 @@ def render(job, result, production=False):
     unresolved = ''.join(f"<li style='margin-bottom:8px;'><a href='{esc(inputs[p['post_id']]['url'],quote=True)}'>{esc(inputs[p['post_id']]['title'])}</a><br>{esc(p['reason'])}</li>" for p in posts.values() if p['verdict']=='needs_review')
     coverage = job['input'].get('collection',{}).get('coverage',[])
     failures = sum(s['status']!='ok' for s in coverage)
-    missing = sum(inputs[p['post_id']]['body_status']!='collected' for p in posts.values() if p['verdict']=='needs_review')
+    missing = sum(not body_available(inputs[p['post_id']]) for p in posts.values() if p['verdict']=='needs_review')
     other_review = counts['needs_review']-missing
     badge = '부정여론 모니터링' if production else '[TEST] 본인 전용 · 운영 발송 0 · 운영 DB 쓰기 0'
     heading = '부정여론 모니터링 결과' if production else '부정여론봇 개선안 실제 환경 검수'

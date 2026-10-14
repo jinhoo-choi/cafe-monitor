@@ -237,6 +237,28 @@ class VerificationRegression(unittest.TestCase):
         self.assertLessEqual(len(excerpt),4000)
         self.assertIn('한국투자증권 MTS 주문 오류',excerpt)
 
+    def test_invisible_or_punctuation_only_body_is_uncollected(self):
+        for text in ('\u200b',' ... \u200b','[외부주소]'):
+            with self.subTest(text=text):
+                source=bot.item('blog:empty','한투 종목 리포트',text,'https://m.blog.naver.com/empty/224000000001','blog','live')
+                self.assertEqual(source['body_status'],'missing')
+                self.assertFalse(bot.body_available(source))
+        self.assertTrue(bot.readable_body('한투 앱 먹통'))
+
+    def test_shinhan_name_is_not_kis_short_alias(self):
+        self.assertFalse(bot.brand_present('신한투자증권 고객센터 불만'))
+        self.assertFalse(bot.brand_present('대한투자증권'))
+        self.assertTrue(bot.brand_present('한투 고객센터'))
+        self.assertTrue(bot.brand_present('한국투자증권의 상품'))
+        self.assertTrue(bot.brand_present('bAnKiS 주문 오류'))
+
+    def test_old_substring_signal_cannot_attribute_shinhan_complaint_to_kis(self):
+        source=self.job['input']['items'][0]
+        source.update(title='신한투자증권 주문 오류',body_excerpt='신한투자증권 주문 접수가 계속 실패해서 불편합니다.',target_present=True)
+        self.job['input_hash']=queue_module.digest(self.job['input']);self.result['input_hash']=self.job['input_hash']
+        self.result['posts'][0]['evidence_quotes']=[{'field':'body_excerpt','quote':source['body_excerpt']}]
+        with self.assertRaisesRegex(ValueError,'실제 언급'):bot.validate(self.job,self.result)
+
     def test_excerpt_budget_keeps_target_after_many_earlier_hint_windows(self):
         prefix=''.join(h+' 설명. '+'일반문장 '*250 for h in ('주문','출금','수수료','불만','오류','사기','보상','MTS','HTS'))
         for claim in ('한국투자증권 룰렛 당첨 경품이 표시와 다릅니다.', 'bAnKiS 주문 접수가 반복해서 실패합니다.'):

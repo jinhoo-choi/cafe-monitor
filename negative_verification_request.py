@@ -1,6 +1,7 @@
 """검수 브랜치의 제한된 메타데이터 요청만 처리한다. 운영 main에서는 실행 금지."""
 import json
 import os
+import sys
 from pathlib import Path
 
 from negative_queue import JOB_ID, Queue, connection
@@ -38,4 +39,8 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as error:
+        print('부정여론 본인 검수 보류: '+type(error).__name__,file=sys.stderr)
+        raise SystemExit(1)

@@ -1,5 +1,6 @@
 {
-  "operation": "collect",
-  "fixture_id": "negative-history-20261014",
-  "request_id": "negative-retest-20261014T0430Z"
+  "operation": "consume",
+  "job_id": "negative-verification-38511731645",
+  "self_test": true,
+  "request_id": "negative-compact-consume-20261014T044825Z"
 }
