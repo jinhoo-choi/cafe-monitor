@@ -76,6 +76,27 @@ class ProductionRegression(unittest.TestCase):
         self.assertEqual(self.path.read_bytes(),self.remote_history)
         self.server.sendmail.assert_not_called()
 
+    def test_existing_thirty_day_history_retention_is_preserved(self):
+        old={'old':(now()-timedelta(days=31)).isoformat(),'recent':now().isoformat()}
+        self.path.write_bytes(bot.history_bytes(old))
+        self.remote_history=self.path.read_bytes()
+        self.job['input']['seen_hash']=common.seen_snapshot()[1]
+        self.rehash();self.reload_queue()
+        bot.consume(self.queue,self.job['job_id'])
+        saved=json.loads(self.path.read_text())
+        self.assertNotIn('old',saved)
+        self.assertEqual(saved['recent'],old['recent'])
+        self.assertIn(self.result['posts'][0]['post_id'],saved)
+
+    def test_history_write_failure_after_acceptance_never_resends(self):
+        with patch.object(bot,'write_history',side_effect=OSError('disk')):
+            with self.assertRaises(OSError):bot.consume(self.queue,self.job['job_id'])
+        self.assertEqual(self.queue.get(self.queue.path)[0]['status'],'delivery_complete')
+        self.assertEqual(list(self.queue.get(self.queue.path)[0]['receipts'].values()),['accepted']*3)
+        with self.assertRaisesRegex(RuntimeError,'잠금'):bot.consume(self.queue,self.job['job_id'])
+        self.assertEqual(self.server.sendmail.call_count,3)
+        with self.assertRaisesRegex(RuntimeError,'이력 불일치'):bot.ack(self.queue,self.job['job_id'])
+
     def test_disconnect_after_data_is_uncertain_and_cannot_retry(self):
         self.server.sendmail.side_effect=ConnectionResetError('unknown after DATA')
         with self.assertRaises(ConnectionResetError):bot.consume(self.queue,self.job['job_id'])

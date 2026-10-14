@@ -1,6 +1,6 @@
 """구독 운영: 기존 수집·수신자 유지, SMTP 영수증→이력 push→private ack."""
 import base64
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.header import Header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -121,6 +121,18 @@ def history_bytes(state):
     return (json.dumps(state,ensure_ascii=False,indent=2)+'\n').encode()
 
 
+def retained_history(state):
+    cutoff = now()-timedelta(days=30)
+    retained = {}
+    for identifier,stamp in state.items():
+        parsed = datetime.fromisoformat(stamp)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=common.KST)
+        if parsed > cutoff:
+            retained[identifier] = stamp
+    return retained
+
+
 def write_history(state):
     path = Path(os.environ.get('NEGATIVE_SEEN_PATH','seen_posts.json'))
     with tempfile.NamedTemporaryFile(dir=path.parent,delete=False) as file:
@@ -166,7 +178,7 @@ def consume(queue, job_id):
     if any(identifier in state for identifier in processed):
         raise RuntimeError('이미 처리된 입력 포함 — 발송 보류')
     stamp = now().astimezone(common.KST).isoformat()
-    expected = {**state,**{identifier:stamp for identifier in processed}}
+    expected = {**retained_history(state),**{identifier:stamp for identifier in processed}}
     expected_hash = hashlib.sha256(history_bytes(expected)).hexdigest()
     queue.put('previews/'+job_id+'.json',{'html':body,'paid_ai_calls':0})
     queue.put('deferred/'+job_id+'.json',{'groups':deferred,'mode':'production',

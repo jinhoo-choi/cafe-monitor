@@ -24,7 +24,7 @@ TEST_MODE=1, NOTIFY_EMAIL=GMAIL_USER, EMAIL_CC 비어 있음이 모두 확인돼
 
 운영 수집은 DB 쓰기·메일 없이 production 회차만 만든다. 120분 지난 pending 중 영수증 없는 회차만 expired로 보존하고 다음 수집을 허용한다. sending/uncertain/delivery_complete는 잠금을 유지한다. 소비는 원문·해시·ID·점수·인용·수치·만료를 검증한 뒤 기존 수신자를 순서대로 한 주소씩 SMTP에 제출한다. 부정 이슈가 없으면 기존처럼 본인 상태메일만 제출한다. SMTP 로그인 실패는 pending을 유지하고, 접수 시도 후 연결 끊김·일부 거부는 uncertain으로 잠그며 자동 재발송하지 않는다.
 
-모든 intended 수신자의 accepted 확인 후 delivery_complete로 기록한다. 비부정과 실제 발송한 그룹의 ID만 seen_posts.json에 원자적으로 저장한다. main push는 3회 재시도하고 rebase 충돌 시 중단한다. main 이력 해시·ID를 다시 확인한 ACK가 있어야 completed가 된다. push·ACK 실패 시 접수된 메일을 재발송하지 않는다. 수집·소비 워크플로는 같은 concurrency 잠금을 쓰고 실패 시 본인 오류 알림을 보낸다.
+모든 intended 수신자의 accepted 확인 후 delivery_complete로 기록한다. 비부정과 실제 발송한 그룹의 ID만 seen_posts.json에 원자적으로 저장하며 기존 30일 이력 유지 기간을 적용한다. main push는 3회 재시도하고 rebase 충돌 시 중단한다. main 이력 해시·ID를 다시 확인한 ACK가 있어야 completed가 된다. push·ACK 실패 시 접수된 메일을 재발송하지 않는다. 수집·소비 워크플로는 같은 concurrency 잠금을 쓰고 실패 시 본인 오류 알림을 보낸다.
 
 GitHub GET 500 등 일시적 읽기 오류만 최대 3번 재시도한다. 401·403과 모든 PUT는 자동 재시도하지 않는다. SMTP 실패·사용량 부족을 유료 API로 우회하지 않는다.
 
