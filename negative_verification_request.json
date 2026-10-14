@@ -1,4 +1,5 @@
 {
-  "operation": "connection",
-  "request_id": "negative-private-connection-approved-20261014"
+  "operation": "collect",
+  "fixture_id": "negative-history-20261014",
+  "request_id": "negative-real-collection-20261014"
 }
