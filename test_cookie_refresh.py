@@ -123,6 +123,35 @@ class CookieTests(unittest.TestCase):
                 self.assertEqual(auth.storage_status(state, 100), 'invalid')
         self.assertEqual(auth.storage_status({'cookies': []}), 'invalid')
 
+    def test_storage_diagnostics_distinguish_expiry_and_missing_without_secret_values(self):
+        cases = [(None, 'invalid', 'missing'), ({'cookies': []}, 'valid', 'missing')]
+        for mutation, expected in [({'expires': 1}, 'expired'), ({'value': ''}, 'empty'),
+                                   ({'domain': 'example.test'}, 'domain_mismatch'),
+                                   ({'expires': True}, 'invalid_expiry')]:
+            state = copy.deepcopy(STATE)
+            next(c for c in state['cookies'] if c['name'] == 'NID_AUT').update(mutation)
+            cases.append((state, 'valid', expected))
+        for state, form, status in cases:
+            checks = {}
+            with self.subTest(form=form, status=status):
+                self.assertEqual(auth.storage_status(state, 100, checks), 'invalid')
+                self.assertEqual(checks['state_format'], form)
+                self.assertEqual(checks['auth_cookies']['NID_AUT'], status)
+                self.assertNotIn('FAKE', json.dumps(checks))
+        checks = {}
+        self.assertEqual(auth.storage_status(STATE, 100, checks), 'present')
+        self.assertEqual(set(checks['auth_cookies'].values()), {'present'})
+
+    def test_invalid_storage_diagnostic_keeps_authenticated_access_and_login_unattempted(self):
+        browser, checks = MagicMock(), {}
+        state = copy.deepcopy(STATE)
+        next(c for c in state['cookies'] if c['name'] == 'NID_SES')['expires'] = 1
+        with patch.object(auth, 'page_status', side_effect=['auth_required', 'auth_required']):
+            self.assertEqual(auth.access_status(browser, state, URLS, checks), 'invalid')
+        self.assertEqual(checks['storage']['auth_cookies']['NID_SES'], 'expired')
+        self.assertEqual(browser.new_context.call_count, 1)
+        self.assertNotIn('authenticated', checks)
+
     def test_url_allowlist(self):
         self.assertEqual(auth.probe_urls(json.dumps(URLS)), URLS)
         for value in [URLS[:1], [URLS[0], URLS[0]], [URLS[0], 'https://evil.test/1'],

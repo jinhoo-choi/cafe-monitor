@@ -57,5 +57,10 @@ Actions의 수동 실행은 기본 `check`다. `check`는 새 로그인·Secret�
 `login_storage_unknown`의 고정 코드로만 단계별 보고한다. 원시 예외 메시지,
 쿠키·페이지 본문·스크린샷은 출력하지 않는다. 24시간 재시도 제한과 추가 인증 중단 기준은 유지한다.
 
+기존 쿠키 점검은 파일 존재 여부, 로그인 Secret 설정 여부(참/거짓), 저장 형식과
+`NID_AUT`/`NID_SES`의 고정 상태 코드만 진단한다. 만료·누락·빈 값·도메인 불일치·만료 형식 오류를
+구분하며 쿠키 값·만료 시각·계정명·비밀번호는 출력하지 않는다. 이 진단을 위해 로그인하거나
+재시도 제한을 변경하지 않는다. 진단은 담당자용이며 임원용 정상 메일에 삽입하지 않는다.
+
 `python -m unittest -v test_cookie_refresh test_cookie_provenance test_negative_verification test_negative_subscription`
 쿠키·큐·브라우저·SMTP를 모의 처리하고 실제 인증/유료 AI를 호출하지 않는다.

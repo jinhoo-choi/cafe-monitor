@@ -241,7 +241,8 @@ def run(mode='auto'):
         return 0 if mode == 'auto' else 2
     from playwright.sync_api import sync_playwright
     queue, attempted, secret_updated, access = None, False, False, 'unknown'
-    checks = {}
+    checks = {'cookie_file_present': COOKIE_FILE.is_file(),
+              'login_credentials_configured': bool(os.environ.get('NAVER_ID')) and bool(os.environ.get('NAVER_PW'))}
     try:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
