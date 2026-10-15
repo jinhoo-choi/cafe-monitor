@@ -35,11 +35,11 @@ def fixture(count=1):
             'member_post_ids':[post['post_id']],'representative_post_id':post['post_id'],'group_reason':'개별 주문 실패 주장 검수'})
     job={'schema_version':1,'bot_id':queue_module.BOT_ID,'mode':'verification','self_test':True,
          'job_id':'negative-offline','status':'pending','expires_at':(queue_module.now()+timedelta(hours=2)).isoformat(),
-         'input':{'policy_version':queue_module.POLICY,'seen_hash':'seen','items':inputs,'collection':{'coverage':[]}},
+         'input':{'policy_version':queue_module.POLICY,'policy_hash':bot.policy_hash(),'seen_hash':'seen','items':inputs,'collection':{'coverage':[]}},
          'receipts':{},'paid_ai_calls':0}
     job['input_hash']=queue_module.digest(job['input'])
     result={'schema_version':1,'bot_id':queue_module.BOT_ID,'policy_version':queue_module.POLICY,
-            'job_id':job['job_id'],'input_hash':job['input_hash'],'analysis_engine':'chatgpt_subscription',
+            'job_id':job['job_id'],'input_hash':job['input_hash'],'policy_hash':bot.policy_hash(),'analysis_engine':'chatgpt_subscription',
             'model_used':'unconfirmed','posts':rows,'groups':groups}
     return job,result
 
@@ -71,6 +71,16 @@ class VerificationRegression(unittest.TestCase):
         self.server.sendmail.return_value={}
         self.smtp=self.stack.enter_context(patch.object(bot.smtplib,'SMTP_SSL',return_value=self.server))
         self.seen=self.stack.enter_context(patch.object(bot,'seen_snapshot',return_value=({},'seen')))
+
+    def test_policy_same_version_change_or_missing_hash_blocks_result(self):
+        for value in [None, '0'*64]:
+            result = copy.deepcopy(self.result)
+            result['policy_hash'] = value
+            with self.assertRaisesRegex(ValueError, '정책 원문 해시'):
+                bot.validate(self.job, result)
+        with patch.object(bot, 'policy_hash', return_value='1'*64), self.assertRaisesRegex(ValueError, '정책 원문 해시'):
+            bot.validate(self.job, self.result)
+        self.smtp.assert_not_called()
 
     def test_valid_native_result(self):
         inputs,rows=bot.validate(self.job,self.result)

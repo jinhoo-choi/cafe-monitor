@@ -64,3 +64,7 @@ SMTP envelope와 기존 접수·중복 방지 상태 관리는 유지한다. 확
 
 회귀 검증: `python -m unittest -v test_negative_verification test_negative_subscription test_cookie_refresh test_cookie_provenance`
 (실제 SMTP·유료 API 호출 없이 검증)
+
+## 2026-10-15 정책 내용 해시 검증
+
+input.policy_hash와 결과 policy_hash를 현재 negative_policy.json의 canonical JSON SHA-256과 대조한다. 수집 전후, 소비 및 각 수신자 제출 전에 main 정책을 재확인한다. 같은 policy_version 안의 내용 변경도 발송을 보류한다. 해시가 없는 legacy pending은 자동 소비하지 않는다. 이미 종결된 회차·영수증·처리 이력은 변경하거나 재전송하지 않는다.

@@ -9,6 +9,7 @@
     "policy_version",
     "job_id",
     "input_hash",
+    "policy_hash",
     "analysis_engine",
     "model_used",
     "posts",
@@ -267,6 +268,10 @@
           }
         }
       }
+    },
+    "policy_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
     }
   }
 }

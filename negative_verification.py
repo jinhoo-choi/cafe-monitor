@@ -30,6 +30,10 @@ MASKS = ('[이메일]', '[연락처]', '[계좌]', '[주민번호]', '[외부주
 ALIASES = ('한국투자증권', '한투', '뱅키스', 'BanKIS')
 
 
+def policy_hash():
+    return digest(json.loads(Path('negative_policy.json').read_text(encoding='utf-8')))
+
+
 def brand_present(text):
     folded = text.casefold()
     return ('한국투자증권' in folded or '뱅키스' in folded
@@ -320,7 +324,7 @@ def collect(queue, fixture_id=None, production=False):
     job = {'schema_version': 1, 'bot_id': BOT_ID, 'mode': 'production' if production else 'verification', 'self_test': not production,
            'job_id': job_id, 'status': 'pending', 'created_at': now().isoformat(),
            'expires_at': (now()+timedelta(minutes=settings['job_ttl_minutes'])).isoformat(),
-           'input': {'policy_version': POLICY, 'seen_hash': state_hash, 'items': list(by_id.values()),
+           'input': {'policy_version': POLICY, 'policy_hash': policy_hash(), 'seen_hash': state_hash, 'items': list(by_id.values()),
                      'collection': {'coverage': coverage, 'historical': historical, 'cookie_loaded': cookie_loaded,
                                     'cookie_expiring': cookie_expiring, 'cookie_auth_status': cookie_auth_status,
                                     'cookie_auth_verified': cookie_auth_verified}},
@@ -350,6 +354,8 @@ def validate(job, result, allow_production=False):
         raise ValueError('검수 입력 만료')
     if job['input'].get('policy_version') != POLICY or job['input_hash'] != digest(job['input']):
         raise ValueError('입력 해시 또는 정책 불일치')
+    if job['input'].get('policy_hash') != policy_hash() or result.get('policy_hash') != job['input']['policy_hash']:
+        raise ValueError('분석 정책 원문 해시 불일치')
     schema = json.loads(Path('negative_result_schema.json').read_text())
     jsonschema.Draft202012Validator(schema).validate(result)
     if result['job_id'] != job['job_id'] or result['input_hash'] != job['input_hash']:

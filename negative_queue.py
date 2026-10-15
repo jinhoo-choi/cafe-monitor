@@ -66,7 +66,7 @@ class Queue:
             raise RuntimeError('비공개 검수 main 브랜치 없음')
 
     def source(self, path):
-        if path not in {'negative_subscription_config.json', 'seen_posts.json'}:
+        if path not in {'negative_subscription_config.json', 'seen_posts.json', 'negative_policy.json'}:
             raise ValueError('운영 설정·이력 읽기만 허용')
         obj = self.request('/contents/'+path+'?ref=main', repository='jinhoo-choi/cafe-monitor')
         if not obj or obj.get('type') != 'file':
