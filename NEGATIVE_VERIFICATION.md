@@ -54,7 +54,8 @@ negative_subscription_config.json의 engine을 paused로 바꿔 새 분석·발�
 
 ## 임원용 본문과 운영자용 진단 분리
 
-운영 발송은 기존 `GMAIL_USER`를 운영자 주소로 사용한다. 같은 회차라도 운영자는
+운영 발송은 `111715@koreainvestment.com`을 명시적으로 승인된 운영자 주소로 사용한다.
+SMTP 로그인·발신 계정 `GMAIL_USER`는 운영자 수신 주소와 독립적이다. 같은 회차라도 운영자는
 수집 오류, 쿠키 상태, 본문 미수집·귀속 확인, 이월 안내가 포함된 전용 사본을 받고,
 `NOTIFY_EMAIL`·`EMAIL_CC` 수신자는 확인된 부정 이슈 카드만 받는다. 주소별 개별
 SMTP envelope와 기존 접수·중복 방지 상태 관리는 유지한다. 확인된 이슈가 없으면

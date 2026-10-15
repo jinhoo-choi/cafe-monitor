@@ -18,6 +18,67 @@ from test_negative_verification import fixture, MemoryQueue
 
 
 class ProductionRegression(unittest.TestCase):
+    def test_distinct_sender_gets_clean_copy_and_fixed_owner_gets_diagnostics(self):
+        from email import message_from_string
+        self.job['input']['collection']={'coverage':[{'status':'cookie_required'}]}
+        self.rehash()
+        self.reload_queue()
+        with patch.dict(os.environ,{'GMAIL_USER':'sender@example.invalid',
+                                   'NOTIFY_EMAIL':'exec@example.invalid','EMAIL_CC':''}):
+            bot.consume(self.queue,self.job['job_id'])
+        self.assertEqual([call.args[1] for call in self.server.sendmail.call_args_list],
+                         [[bot.OWNER_EMAIL],['sender@example.invalid'],['exec@example.invalid']])
+        self.server.login.assert_called_with('sender@example.invalid','offline')
+        for call in self.server.sendmail.call_args_list:
+            self.assertEqual(call.args[0],'sender@example.invalid')
+            mail=message_from_string(call.args[2])
+            self.assertEqual(mail['To'],call.args[1][0])
+            body=mail.get_payload(0).get_payload(decode=True).decode('utf-8')
+            self.assertEqual('NAVER_COOKIES_JSON' in body,call.args[1]==[bot.OWNER_EMAIL])
+
+    def test_status_only_never_goes_to_distinct_sender_or_executives(self):
+        with patch.dict(os.environ,{'GMAIL_USER':'sender@example.invalid'}):
+            self.assertEqual(bot.recipients(0),('sender@example.invalid',[bot.OWNER_EMAIL]))
+
+    def test_error_cookie_and_verification_notices_use_fixed_owner(self):
+        import refresh_cookies
+        from email import message_from_string
+        with patch.dict(os.environ,{'GMAIL_USER':'sender@example.invalid',
+                                   'NOTIFY_EMAIL':'sender@example.invalid','EMAIL_CC':'','TEST_MODE':'1'}):
+            self.server.__enter__.return_value=self.server
+            bot.notify_error()
+            queue=MagicMock()
+            queue.get.return_value=(None,None)
+            self.assertEqual(refresh_cookies.owner_notice(queue,'cookie_required'),'accepted')
+            common.send_owner('owner diagnostic','diagnostic body',common.owner())
+        self.assertEqual(self.server.sendmail.call_count,3)
+        for call in self.server.sendmail.call_args_list:
+            self.assertEqual(call.args[:2],('sender@example.invalid',[bot.OWNER_EMAIL]))
+            mail=message_from_string(call.args[2])
+            self.assertEqual(mail['To'],bot.OWNER_EMAIL)
+            self.assertIsNone(mail['Cc'])
+            self.assertIsNone(mail['Bcc'])
+
+    def test_legacy_status_and_refusal_notices_use_fixed_owner(self):
+        import ast, html
+        from datetime import datetime
+        from email import message_from_string
+        names={'send_status_email','_notify_send_failure'}
+        nodes=[node for node in ast.parse(Path('monitor.py').read_text()).body
+               if isinstance(node,ast.FunctionDef) and node.name in names]
+        namespace=dict(vars(bot),DRY_RUN=False,datetime=datetime,KST=common.KST,html=html,
+                       GMAIL_USER='sender@example.invalid',GMAIL_APP_PW='offline',
+                       log=lambda *args:None,_from_header=lambda:'sender@example.invalid',
+                       _addr_header=lambda value:value)
+        exec(compile(ast.Module(body=nodes,type_ignores=[]),'legacy-status','exec'),namespace)
+        self.server.__enter__.return_value=self.server
+        namespace['send_status_email']('error','offline diagnostic')
+        namespace['_notify_send_failure']('offline test',{'exec@example.invalid':(550,b'refused')})
+        self.assertEqual(self.server.sendmail.call_count,2)
+        for call in self.server.sendmail.call_args_list:
+            self.assertEqual(call.args[:2],('sender@example.invalid',[bot.OWNER_EMAIL]))
+            self.assertEqual(message_from_string(call.args[2])['To'],bot.OWNER_EMAIL)
+
     def test_mixed_diagnostics_only_reach_owner_envelope(self):
         from email import message_from_string
         self.job,self.result=fixture(2)
@@ -39,7 +100,7 @@ class ProductionRegression(unittest.TestCase):
             self.assertIn('224000000001',body)
             self.assertNotIn('확인필요',mail['Subject'])
             for diagnostic in ('NAVER_COOKIES_JSON','본문 미수집','회원 전용 본문 인증 미확인','224000000002'):
-                if call.args[1]==['owner@example.invalid']:
+                if call.args[1]==['111715@koreainvestment.com']:
                     self.assertIn(diagnostic,body)
                 else:
                     self.assertNotIn(diagnostic,body)
@@ -63,9 +124,9 @@ class ProductionRegression(unittest.TestCase):
         node=next(n for n in ast.parse(Path('monitor.py').read_text()).body
                   if isinstance(n,ast.FunctionDef) and n.name=='send_alert_batch')
         namespace=dict(vars(bot),DRY_RUN=False,API_STATS={},datetime=datetime,KST=common.KST,
-                       html=html,build_card=negative_mail.build_card,GMAIL_USER='owner@example.invalid',
+                       html=html,build_card=negative_mail.build_card,GMAIL_USER='sender@example.invalid',
                        GMAIL_APP_PW='offline',RECIPIENTS=['ops@example.invalid'],CC_RECIPIENTS=[],
-                       log=lambda *args:None,_from_header=lambda:'owner@example.invalid',
+                       log=lambda *args:None,_from_header=lambda:'sender@example.invalid',
                        _addr_header=lambda value:value,_warn_refused=lambda *args:None)
         exec(compile(ast.Module(body=[node],type_ignores=[]),'legacy-batch','exec'),namespace)
         post={'title':'한국투자증권 주문 오류','url':'https://example.invalid/finding',
@@ -77,7 +138,7 @@ class ProductionRegression(unittest.TestCase):
             mail=message_from_string(call.args[2])
             body=mail.get_payload(0).get_payload(decode=True).decode('utf-8')
             self.assertIn('주문 오류 신고',body)
-            if call.args[1]==['owner@example.invalid']:
+            if call.args[1]==['111715@koreainvestment.com']:
                 self.assertIn('본문 미수집',body)
                 self.assertIn('https://example.invalid/review',body)
             else:
@@ -92,8 +153,8 @@ class ProductionRegression(unittest.TestCase):
         self.path=Path(self.tmp)/'seen.json'
         self.path.write_text('{}\n')
         self.stack.enter_context(patch.dict(os.environ,{'NEGATIVE_SEEN_PATH':str(self.path),
-            'GMAIL_USER':'owner@example.invalid','GMAIL_APP_PW':'offline',
-            'NOTIFY_EMAIL':'ops@example.invalid,owner@example.invalid',
+            'GMAIL_USER':'111715@koreainvestment.com','GMAIL_APP_PW':'offline',
+            'NOTIFY_EMAIL':'ops@example.invalid,111715@koreainvestment.com',
             'EMAIL_CC':'cc@example.invalid,ops@example.invalid','GITHUB_REF':'refs/heads/main'}))
         self.job,self.result=fixture()
         self.job.update(mode='production',self_test=False)
@@ -122,7 +183,7 @@ class ProductionRegression(unittest.TestCase):
         self.assertEqual(list(state['receipts'].values()),['accepted']*3)
         self.assertEqual(self.server.sendmail.call_count,3)
         self.assertEqual([c.args[1] for c in self.server.sendmail.call_args_list],
-                         [['owner@example.invalid'],['ops@example.invalid'],['cc@example.invalid']])
+                         [['111715@koreainvestment.com'],['ops@example.invalid'],['cc@example.invalid']])
         self.assertIn(self.job['input']['items'][0]['post_id'],json.loads(self.path.read_text()))
         with self.assertRaisesRegex(RuntimeError,'이력 불일치'):bot.ack(self.queue,self.job['job_id'])
         self.remote_history=self.path.read_bytes()
@@ -188,7 +249,7 @@ class ProductionRegression(unittest.TestCase):
         self.rehash();self.reload_queue()
         bot.consume(self.queue,self.job['job_id'])
         self.server.sendmail.assert_called_once()
-        self.assertEqual(self.server.sendmail.call_args.args[1],['owner@example.invalid'])
+        self.assertEqual(self.server.sendmail.call_args.args[1],['111715@koreainvestment.com'])
         self.assertEqual(json.loads(self.path.read_text()),{})
         self.assertEqual(self.queue.get(self.queue.path)[0]['processed_ids'],[])
         self.assertTrue(self.queue.get('reviews/'+self.job['job_id']+'.json')[0]['retry_next_collection'])
@@ -199,7 +260,7 @@ class ProductionRegression(unittest.TestCase):
         self.reload_queue()
         bot.consume(self.queue,self.job['job_id'])
         self.server.sendmail.assert_called_once()
-        self.assertEqual(self.server.sendmail.call_args.args[1],['owner@example.invalid'])
+        self.assertEqual(self.server.sendmail.call_args.args[1],['111715@koreainvestment.com'])
         self.assertIn(self.result['posts'][0]['post_id'],json.loads(self.path.read_text()))
 
     def test_verified_or_historical_inputs_never_use_operating_recipients(self):
@@ -372,7 +433,7 @@ class ProductionRegression(unittest.TestCase):
     def test_restored_body_is_sent_as_html_mime(self):
         from email import message_from_string
         rendered=common.render(self.job,self.result,production=True)
-        mail=message_from_string(bot.message('test',rendered,'owner@example.invalid','ops@example.invalid'))
+        mail=message_from_string(bot.message('test',rendered,'111715@koreainvestment.com','ops@example.invalid'))
         part=next(p for p in mail.walk() if p.get_content_type()=='text/html')
         self.assertEqual(part.get_payload(decode=True).decode('utf-8'),rendered)
         self.assertIn('background:#c62828',part.get_payload(decode=True).decode('utf-8'))

@@ -1,4 +1,6 @@
 """구독 운영: 기존 수집·수신자 유지, SMTP 영수증→이력 push→private ack."""
+from notification_owner import OWNER_EMAIL
+
 import base64
 from datetime import datetime, timedelta
 from email.header import Header
@@ -89,7 +91,7 @@ def recipients(negative_count):
     cc = [a.strip() for a in os.environ.get('EMAIL_CC','').split(',') if a.strip()]
     if not sender or not notify or not os.environ.get('GMAIL_APP_PW'):
         raise RuntimeError('기존 SMTP 수신자·인증 설정 누락')
-    targets = list(dict.fromkeys([sender]+(notify+cc if negative_count else [])))
+    targets = list(dict.fromkeys([OWNER_EMAIL]+([sender]+notify+cc if negative_count else [])))
     if any('\n' in a or '\r' in a or '@' not in a for a in targets):
         raise ValueError('SMTP 수신자 형식 오류')
     return sender, targets
@@ -215,7 +217,7 @@ def consume(queue, job_id):
             settings(queue,live=True)
             change(queue,job_id,lambda row:row['receipts'].update({key:'sending'}))
             try:
-                refused = server.sendmail(sender,[address],message(subject,body if address == sender else executive_body,sender,address))
+                refused = server.sendmail(sender,[address],message(subject,body if address == OWNER_EMAIL else executive_body,sender,address))
             except smtplib.SMTPRecipientsRefused:
                 change(queue,job_id,lambda row:row['receipts'].update({key:'rejected'}))
                 raise RuntimeError('운영 수신자 SMTP 거부') from None
@@ -296,7 +298,7 @@ def notify_error():
     body = '<p>부정여론봇 구독 경로를 보류했습니다. 유료 API로 전환하지 않았습니다.</p><p>수집·발송·이력 상태는 <a href="'+url+'">Actions 실행 기록</a>에서 확인해 주세요. 접수된 메일을 임의로 재발송하지 마세요.</p>'
     with smtplib.SMTP_SSL('smtp.gmail.com',465,timeout=20) as server:
         server.login(sender,os.environ['GMAIL_APP_PW'])
-        refused = server.sendmail(sender,[sender],message('[부정여론봇] 구독 경로 오류',body,sender,sender))
+        refused = server.sendmail(sender,[OWNER_EMAIL],message('[부정여론봇] 구독 경로 오류',body,sender,OWNER_EMAIL))
     if refused:
         raise RuntimeError('본인 오류 알림 거부')
     print('본인 오류 알림 SMTP accepted 1건; API0')

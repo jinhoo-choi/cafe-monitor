@@ -64,8 +64,8 @@ class VerificationRegression(unittest.TestCase):
         self.stack=ExitStack()
         self.addCleanup(self.stack.close)
         self.stack.enter_context(redirect_stdout(StringIO()))
-        self.stack.enter_context(patch.dict(os.environ,{'GMAIL_USER':'owner@example.invalid','GMAIL_APP_PW':'offline',
-            'NOTIFY_EMAIL':'owner@example.invalid','EMAIL_CC':'','TEST_MODE':'1'}))
+        self.stack.enter_context(patch.dict(os.environ,{'GMAIL_USER':'111715@koreainvestment.com','GMAIL_APP_PW':'offline',
+            'NOTIFY_EMAIL':'111715@koreainvestment.com','EMAIL_CC':'','TEST_MODE':'1'}))
         self.server=MagicMock()
         self.server.__enter__.return_value=self.server
         self.server.sendmail.return_value={}
@@ -88,7 +88,7 @@ class VerificationRegression(unittest.TestCase):
         self.assertEqual(state['paid_ai_calls'],0)
         self.assertEqual(list(state['receipts'].values()),['accepted'])
         self.server.sendmail.assert_called_once()
-        self.assertEqual(self.server.sendmail.call_args.args[1],['owner@example.invalid'])
+        self.assertEqual(self.server.sendmail.call_args.args[1],['111715@koreainvestment.com'])
         self.assertIn('previews/'+self.job['job_id']+'.json',self.queue.files)
 
     def test_completed_verification_is_never_resent(self):
@@ -141,7 +141,7 @@ class VerificationRegression(unittest.TestCase):
         self.server.sendmail.assert_called_once()
 
     def test_smtp_refusal_never_marks_verified(self):
-        self.server.sendmail.return_value={'owner@example.invalid':(550,b'no')}
+        self.server.sendmail.return_value={'111715@koreainvestment.com':(550,b'no')}
         with self.assertRaisesRegex(RuntimeError,'SMTP 거부'): bot.consume(self.queue,self.job['job_id'])
         self.assertEqual(self.queue.get(self.queue.path)[0]['status'],'uncertain')
 
@@ -330,7 +330,7 @@ class QueueAndRequestRegression(unittest.TestCase):
                     with self.subTest(raw=raw),self.assertRaises((ValueError,json.JSONDecodeError)):bot.seen_snapshot()
 
     def test_legacy_paid_paths_and_db_writes_are_disabled(self):
-        with patch.dict(os.environ,{'GMAIL_USER':'owner@example.invalid','GMAIL_APP_PW':'offline','NOTIFY_EMAIL':'owner@example.invalid'}):
+        with patch.dict(os.environ,{'GMAIL_USER':'111715@koreainvestment.com','GMAIL_APP_PW':'offline','NOTIFY_EMAIL':'111715@koreainvestment.com'}):
             module=bot.collector()
         for name in ('main','analyze_sentiment','group_similar_alerts','regenerate_widespread_reply','mark_seen','send_alert_batch'):
             with self.subTest(name=name),self.assertRaisesRegex(RuntimeError,'금지'):getattr(module,name)()
@@ -339,3 +339,4 @@ class QueueAndRequestRegression(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+

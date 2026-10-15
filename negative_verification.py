@@ -1,4 +1,6 @@
 """실제 수집→구독 분석 결과 검증→본인 SMTP 검수. 운영 main·DB·API는 실행하지 않는다."""
+from notification_owner import OWNER_EMAIL
+
 import copy
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
@@ -468,22 +470,23 @@ def owner():
     if (os.environ.get('TEST_MODE')!='1' or not address or not os.environ.get('GMAIL_APP_PW')
             or os.environ.get('NOTIFY_EMAIL','').strip()!=address or os.environ.get('EMAIL_CC','').strip()):
         raise RuntimeError('본인 검수 수신자 격리 설정 실패')
-    return address
+    return OWNER_EMAIL
 
 
 def send_owner(subject, body, address):
     if address != owner():
         raise RuntimeError('본인 이외 envelope 수신자 금지')
+    sender = os.environ['GMAIL_USER'].strip()
     message = MIMEMultipart('alternative')
     message['Subject'] = subject
-    message['From'] = formataddr((str(Header('부정여론봇','utf-8')), address))
+    message['From'] = formataddr((str(Header('부정여론봇','utf-8')), sender))
     message['To'] = address
     message['Date'] = formatdate(localtime=True)
     message['Message-ID'] = make_msgid(domain='gmail.com')
     message.attach(MIMEText(body,'html','utf-8'))
     with smtplib.SMTP_SSL('smtp.gmail.com',465,timeout=20) as server:
-        server.login(address,os.environ['GMAIL_APP_PW'])
-        refused = server.sendmail(address,[address],message.as_string())
+        server.login(os.environ['GMAIL_USER'].strip(),os.environ['GMAIL_APP_PW'])
+        refused = server.sendmail(sender,[address],message.as_string())
     if refused:
         raise RuntimeError('본인 테스트메일 SMTP 거부')
 
@@ -513,7 +516,7 @@ def consume(queue, job_id):
     queue.put('previews/'+job_id+'.json',{'html':body,'paid_ai_calls':0})
     queue.put('deferred/'+job_id+'.json',{'groups':deferred,'mode':'verification','production_seen_writes':0})
     with smtplib.SMTP_SSL('smtp.gmail.com',465,timeout=20) as server:
-        server.login(address,os.environ['GMAIL_APP_PW'])
+        server.login(os.environ['GMAIL_USER'].strip(),os.environ['GMAIL_APP_PW'])
     latest, latest_sha = queue.get(path)
     if latest.get('status')!='pending' or latest.get('receipts') or latest['input_hash']!=job['input_hash']:
         raise RuntimeError('검수 발송 직전 상태 변경')
@@ -543,5 +546,6 @@ def consume(queue, job_id):
         raise
     print(json.dumps({'job_id':job_id,'status':'verified','self_test':True,'smtp_accepted':1,
                       'production_recipients':0,'production_seen_writes':0,'paid_ai_calls':0}))
+
 
 
