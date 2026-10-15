@@ -198,6 +198,18 @@ def run(mode='auto'):
     if settings.get('engine') != 'subscription' or os.environ.get('DRY_RUN') == '1':
         print('[쿠키갱신] 보류; 로그인0/쓰기0/메일0/API0')
         return 0
+    if mode == 'check_access':
+        # Dedicated read-only diagnostic: no cookie access, browser, login, queue writes,
+        # Secret PUT or SMTP, even if credential permissions are already valid.
+        try:
+            secret_key()
+            report('secret_access_confirmed', login_attempted=False, secret_updated=False, notification='not_sent')
+            return 0
+        except Exception as error:
+            status = str(error) if isinstance(error, RenewalError) else 'secret_preflight_unknown'
+            details = {'http_status': error.http_status} if isinstance(error, RenewalError) and error.http_status else {}
+            report(status, login_attempted=False, secret_updated=False, notification='not_sent', **details)
+            return 2
     if os.environ.get('COOKIE_AUTO_RENEW_ENABLED', 'true').lower() in {'0', 'false'}:
         report('disabled', login_attempted=False, secret_updated=False)
         return 0
@@ -265,5 +277,5 @@ def run(mode='auto'):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', choices=['auto', 'check', 'renew'], default='auto')
+    parser.add_argument('--mode', choices=['auto', 'check', 'check_access', 'renew'], default='auto')
     raise SystemExit(run(parser.parse_args().mode))

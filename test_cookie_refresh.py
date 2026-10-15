@@ -154,6 +154,16 @@ class CookieTests(unittest.TestCase):
 
 
 class RunTests(unittest.TestCase):
+    def test_access_diagnostic_cannot_login_store_or_notify_even_with_valid_key(self):
+        for error in [None,renewal.RenewalError('secret_permission_failed',403)]:
+            with patch.object(renewal,'secret_key',side_effect=error), \
+                 patch.object(renewal,'load_storage') as storage, \
+                 patch.object(renewal,'login_once') as login, patch.object(renewal,'store_secret') as secret, \
+                 patch.object(renewal,'owner_notice') as smtp, patch.object(renewal,'live_queue') as queue:
+                self.assertEqual(renewal.run('check_access'),2 if error else 0)
+                storage.assert_not_called(); login.assert_not_called(); secret.assert_not_called()
+                smtp.assert_not_called(); queue.assert_not_called()
+
     def setUp(self):
         self.previous = os.getcwd()
         self.directory = tempfile.TemporaryDirectory()
