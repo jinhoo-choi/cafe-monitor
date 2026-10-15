@@ -36,6 +36,43 @@ class FakeQueue:
 
 
 class CookieTests(unittest.TestCase):
+    def test_login_failure_reports_only_fixed_phase_and_closes_context(self):
+        stages = [('new_context', 'login_context_unknown'),
+                  ('goto', 'login_navigation_unknown'), ('fill', 'login_form_unknown'),
+                  ('click', 'login_submit_unknown'), ('inner_text_result', 'login_result_unknown'),
+                  ('storage_state', 'login_storage_unknown')]
+        for operation, expected in stages:
+            browser, context, page = MagicMock(), MagicMock(), MagicMock()
+            browser.new_context.return_value = context
+            context.new_page.return_value = page
+            page.inner_text.return_value = ''
+            page.url = 'https://www.naver.com/'
+            context.storage_state.return_value = STATE
+            error = RuntimeError('FAKE_PASSWORD_COOKIE_PAGE_CONTENT')
+            if operation == 'new_context':
+                browser.new_context.side_effect = error
+            elif operation == 'storage_state':
+                context.storage_state.side_effect = error
+            elif operation == 'inner_text_result':
+                page.inner_text.side_effect = [''] * len(auth.CHALLENGES) + [error]
+            else:
+                getattr(page, operation).side_effect = error
+            with self.subTest(operation=operation), patch.dict(os.environ, NAVER_ID='FAKE', NAVER_PW='FAKE'):
+                with self.assertRaises(renewal.RenewalError) as raised:
+                    renewal.login_once(browser)
+                self.assertEqual(str(raised.exception), expected)
+                if operation != 'new_context':
+                    context.close.assert_called_once()
+
+    def test_login_challenge_still_stops_before_credentials(self):
+        browser, page = MagicMock(), MagicMock()
+        browser.new_context.return_value.new_page.return_value = page
+        page.inner_text.return_value = auth.CHALLENGES[0]
+        with self.assertRaisesRegex(renewal.RenewalError, 'human_required'):
+            renewal.login_once(browser)
+        page.fill.assert_not_called()
+        page.click.assert_not_called()
+
     def test_key_service_failure_is_bounded_and_not_mislabeled_permission(self):
         with patch.dict(os.environ,{'ADMIN_GITHUB_TOKEN':'FAKE_SECRET','GITHUB_REPOSITORY':renewal.REPO}), \
              patch('requests.get',return_value=MagicMock(status_code=500)) as get, \

@@ -52,5 +52,10 @@ Actions의 수동 실행은 기본 `check`다. `check`는 새 로그인·Secret�
 
 ## 오프라인 검증
 
+로그인 중 예외는 `login_context_unknown`, `login_navigation_unknown`,
+`login_form_unknown`, `login_submit_unknown`, `login_result_unknown`,
+`login_storage_unknown`의 고정 코드로만 단계별 보고한다. 원시 예외 메시지,
+쿠키·페이지 본문·스크린샷은 출력하지 않는다. 24시간 재시도 제한과 추가 인증 중단 기준은 유지한다.
+
 `python -m unittest -v test_cookie_refresh test_cookie_provenance test_negative_verification test_negative_subscription`
 쿠키·큐·브라우저·SMTP를 모의 처리하고 실제 인증/유료 AI를 호출하지 않는다.
