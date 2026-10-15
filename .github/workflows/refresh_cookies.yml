@@ -66,7 +66,7 @@ jobs:
       - name: Secrets 공개키 읽기 권한만 진단 — 로그인0·쓰기0·메일0
         if: steps.request.outputs.mode == 'check_access'
         env:
-          ADMIN_GITHUB_TOKEN: ${{ secrets.ADMIN_GITHUB_TOKEN }}
+          ADMIN_GITHUB_TOKEN: ${{ secrets.NEGATIVE_QUEUE_TOKEN }}
         run: python refresh_cookies.py --mode check_access
       - name: 실제 회원 본문 인증·필요시 1회 갱신 — API0·운영 발송0
         if: steps.request.outputs.mode != 'check_access'
@@ -77,7 +77,7 @@ jobs:
           COOKIE_AUTO_RENEW_ENABLED: ${{ vars.COOKIE_AUTO_RENEW_ENABLED }}
           NAVER_ID: ${{ secrets.NAVER_ID }}
           NAVER_PW: ${{ secrets.NAVER_PW }}
-          ADMIN_GITHUB_TOKEN: ${{ secrets.ADMIN_GITHUB_TOKEN }}
+          ADMIN_GITHUB_TOKEN: ${{ secrets.NEGATIVE_QUEUE_TOKEN }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PW: ${{ secrets.GMAIL_APP_PW }}
         run: python refresh_cookies.py --mode "$MODE"
