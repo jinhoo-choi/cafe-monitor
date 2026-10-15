@@ -4,6 +4,38 @@ import cookie_auth
 
 
 class ProbeProvenance(unittest.TestCase):
+    def test_verified_article_api_body_is_readable_when_dom_is_only_menu(self):
+        page = MagicMock()
+        page.url = 'https://cafe.naver.com/f-e/cafes/100/articles/101'
+        page.frames=[]; page.goto.return_value.status=200
+        response=MagicMock()
+        response.url='https://article.cafe.naver.com/gw/v4/cafes/100/articles/101'
+        response.status=200; response.request.resource_type='xhr'
+        response.json.return_value={'result':{'cafeId':100,'articleId':101,'article':{
+            'isReadable':True,'contentHtml':'<p>요청한 기사의 실제 본문을 확인했습니다.</p>'*10}}}
+        page.on.side_effect=lambda event,callback: callback(response)
+        self.assertEqual(cookie_auth.page_status(page,page.url),'body')
+
+    def test_article_json_actual_body_counts_without_client_rendering(self):
+        value={'result':{'cafeId':100,'articleId':101,'article':{'isReadable':True,
+            'contentHtml':'<p>실제 게시글 본문을 요청한 원문에서 확인했습니다.</p>'*5}}}
+        self.assertTrue(cookie_auth.article_api_body(value,'100','101'))
+        self.assertFalse(cookie_auth.article_api_body(value,'100','999'))
+        value['result']['article']['isReadable']=False
+        self.assertFalse(cookie_auth.article_api_body(value,'100','101'))
+
+    def test_article_image_can_verify_access_without_claiming_text_analysis(self):
+        value={'result':{'cafeId':100,'articleId':101,'article':{'isReadable':True,
+            'contentHtml':'<img src="https://cafefiles.pstatic.net/fake-image.png">'}}}
+        self.assertTrue(cookie_auth.article_api_body(value,'100','101'))
+
+    def test_script_error_mask_and_empty_metadata_are_not_article_body(self):
+        for content in ['<script>기사 본문처럼 보이는 스크립트입니다</script>'*10,
+                        '<style>한국투자증권</style>'*10,'<p>[외부주소]</p>'*100,'']:
+            value={'result':{'cafeId':100,'articleId':101,'article':{'isReadable':True,'contentHtml':content}}}
+            self.assertFalse(cookie_auth.article_api_body(value,'100','101'))
+        self.assertFalse(cookie_auth.article_api_body({'result':{'cafeId':100,'articleId':101}},'100','101'))
+
     def test_article_response_after_dom_ready_is_observed_before_decision(self):
         page = MagicMock()
         page.url = 'https://cafe.naver.com/f-e/cafes/100/articles/101'

@@ -1,5 +1,6 @@
 """Read-only cookie validation; never log credentials, page text or probe URLs."""
 import json
+from html.parser import HTMLParser
 import math
 import re
 import time
@@ -65,10 +66,42 @@ def readable(text):
     return len(re.findall(r'[가-힣A-Za-z0-9]', text)) >= 30
 
 
+def article_api_body(obj, cafe_id, article_id):
+    """Only the requested, readable article's actual content counts; never menus/error HTML."""
+    result = obj.get('result', {}) if isinstance(obj, dict) else {}
+    if not isinstance(result, dict) or str(result.get('cafeId')) != cafe_id or str(result.get('articleId')) != article_id:
+        return False
+    article = result.get('article', {})
+    if not isinstance(article, dict) or article.get('isReadable') is not True or article.get('isBlind') is True:
+        return False
+    content = article.get('contentHtml', '')
+    if not isinstance(content, str) or len(content) > 2_000_000:
+        return False
+    class Content(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.text, self.media, self.hidden = [], False, 0
+        def handle_starttag(self, tag, attrs):
+            if tag in {'script','style'}:
+                self.hidden += 1
+            if not self.hidden and tag in {'img','video','audio'} and dict(attrs).get('src'):
+                self.media = True
+        def handle_endtag(self, tag):
+            if tag in {'script','style'} and self.hidden:
+                self.hidden -= 1
+        def handle_data(self, text):
+            if not self.hidden:
+                self.text.append(text)
+    parsed = Content()
+    parsed.feed(content)
+    return readable(' '.join(parsed.text)) or parsed.media
+
+
 def page_status(page, url, diagnostic=None):
     """A public homepage or HTTP 200 never proves authenticated access."""
     target = re.search(r'/cafes/(\d+)/articles/(\d+)', urlparse(url).path)
     article_responses = []
+    api_bodies = []
     def matching(response):
         parsed = urlparse(response.url)
         return bool(target and parsed.hostname in {'article.cafe.naver.com', 'apis.naver.com', 'cafe.naver.com'}
@@ -78,6 +111,8 @@ def page_status(page, url, diagnostic=None):
         try:
             if matching(response):
                 article_responses.append(response.status)
+                if response.status == 200:
+                    api_bodies.append(article_api_body(response.json(), target[1], target[2]))
         except Exception:
             pass
     page.on('response', capture)
@@ -117,6 +152,9 @@ def page_status(page, url, diagnostic=None):
                     return 'body'
         if diagnostic is not None:
             diagnostic['article_http_statuses'] = sorted(set(article_responses))
+            diagnostic['article_body_available'] = any(api_bodies)
+        if any(api_bodies):
+            return 'body'
         # The SPA can show only the cafe menu after its article API returns 401.
         # Do not mistake the outer page's HTTP 200 for successful article access.
         if 401 in article_responses:
