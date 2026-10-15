@@ -1,5 +1,5 @@
 {
   "operation": "cookie_preflight",
-  "mode": "auto",
-  "request_id": "cookie-auto-20261015T0917-once"
+  "mode": "check_access",
+  "request_id": "cookie-readonly-secret-get-20261015T0926"
 }
