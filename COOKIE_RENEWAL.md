@@ -19,8 +19,12 @@
 ## 갱신과 비밀값
 
 - 정상 쿠키는 비밀번호 로그인과 Secret 쓰기 없이 유지한다.
-- 실제 인증 실패가 확인된 경우에만 기존 `NAVER_ID`, `NAVER_PW`, `ADMIN_GITHUB_TOKEN`을 사용한다.
-  해당 토큰에는 이 저장소의 Actions Secrets 쓰기 권한이 필요하다. 기존 큐 토큰의 Contents 권한만으로는 안 된다.
+- 실제 인증 실패가 확인된 경우에만 기존 `NAVER_ID`, `NAVER_PW`와 승인된 인사이트 전환용 키를 사용한다.
+  인사이트 `INSIGHT_QUEUE_TOKEN`을 10/14 암호화 복사한 `NEGATIVE_QUEUE_TOKEN`을
+  쿠키 단계의 `ADMIN_GITHUB_TOKEN` 환경변수에 연결한다. Secret 값을 로그·코드·채팅으로 읽거나
+  기존 `ADMIN_GITHUB_TOKEN` Secret을 덮어쓰지 않는다. 무효한 기존 ADMIN 키로 폴백하지 않는다.
+  해당 토큰에는 이 저장소의 Actions Secrets 쓰기 권한이 필요하다. Contents 권한만으로는 안 되므로
+  `check_access`의 Secrets 공개키 GET을 먼저 확인하고, 거부되면 로그인·Secret 교체 없이 중단한다.
 - 기존 `NEGATIVE_QUEUE_TOKEN`으로 비공개 `auth/cookie_control.json`에 로그인 시도를 먼저 예약한다.
   blob SHA 충돌, 저장/재조회 실패, 24시간 이내 기존 시도가 있으면 로그인하지 않는다.
   이 파일에는 시도 시각·실행 ID·알림 시각만 있고 쿠키·비밀번호·본문·주소는 없다.
@@ -36,7 +40,7 @@
 
 Actions의 수동 실행은 기본 `check`다. `check`는 새 로그인·Secret·비공개 제어 상태 쓰기·메일 없이
 기존 인증만 확인하고, 정상으로 확인되지 않으면 실패 상태로 종료한다.
-`check_access`는 기존 ADMIN_GITHUB_TOKEN으로 Secrets 공개키 GET만 진단한다.
+`check_access`는 인사이트 전환용 키를 연결한 ADMIN_GITHUB_TOKEN 환경변수로 Secrets 공개키 GET만 진단한다.
 쿠키 복원·브라우저·네이버 로그인·큐 쓰기·Secret PUT·메일은 실행하지 않는다.
 공개 `cookie_refresh_request.json`은 `operation`, `mode`, `request_id`만 받으며 `main`에서만 실행한다.
 `auto`는 확인되지 않은 상태에서도 공개 범위 수집을 지속할 수 있도록 종료 코드와 인증 상태를 구분한다.
