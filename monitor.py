@@ -1358,6 +1358,10 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count, unresolved_posts
         kind = "발신자 전용 (확인필요 단독)"
     targets = list(dict.fromkeys([GMAIL_USER] + bcc_all))  # 본인 포함, 중복 제거(순서 유지)
 
+    # Operational review details remain in the owner copy only.
+    from negative_mail import render_email
+    executive_body = (render_email(alert_posts, crawled_count, keyword_count, now_kst=now_kst)
+                      if alert_posts else None)
     refused_all = {}
     # 개별발송(수신자 1명/호출)에서는 거부 시 sendmail()이 dict를 반환하는 게 아니라
     # SMTPRecipientsRefused 예외를 던짐(수신자 전원=1명 거부이므로). 예외를 잡지 않으면
@@ -1377,7 +1381,7 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count, unresolved_posts
             m["To"] = _addr_header(addr)
             m["Date"] = formatdate(localtime=True)
             m["Message-ID"] = make_msgid(domain="gmail.com")
-            m.attach(MIMEText(html_body, "html", "utf-8"))
+            m.attach(MIMEText(html_body if addr == GMAIL_USER else executive_body, "html", "utf-8"))
             try:
                 r = s.sendmail(GMAIL_USER, [addr], m.as_string())
                 if r:  # 단건 발송에선 이론상 빈 dict지만 방어적으로 유지
@@ -1760,6 +1764,7 @@ if __name__ == "__main__":
             print('부정여론 구독 일시정지; 발송0/API0')
     else:
         main()
+
 
 
 

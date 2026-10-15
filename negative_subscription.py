@@ -170,6 +170,11 @@ def consume(queue, job_id):
     selected, deferred = common.selected_groups(result)
     sender, targets = recipients(len(selected))
     body = common.render(job,result,production=True)
+    executive_body = None
+    if selected:
+        from negative_mail import render as render_mail
+        executive_body = render_mail(job,result,inputs,posts,selected,deferred,
+                                     production=True,executive=True)
     state, state_hash = common.seen_snapshot()
     if state_hash != job['input']['seen_hash']:
         raise RuntimeError('분석 입력 이후 운영 이력 변경 — 발송 보류')
@@ -210,7 +215,7 @@ def consume(queue, job_id):
             settings(queue,live=True)
             change(queue,job_id,lambda row:row['receipts'].update({key:'sending'}))
             try:
-                refused = server.sendmail(sender,[address],message(subject,body,sender,address))
+                refused = server.sendmail(sender,[address],message(subject,body if address == sender else executive_body,sender,address))
             except smtplib.SMTPRecipientsRefused:
                 change(queue,job_id,lambda row:row['receipts'].update({key:'rejected'}))
                 raise RuntimeError('운영 수신자 SMTP 거부') from None
@@ -331,4 +336,5 @@ if __name__ == '__main__':
         # 스키마 오류에 포함될 수 있는 비공개 원문·분석을 공개 로그에 출력하지 않는다.
         print('부정여론 구독 경로 보류: '+type(error).__name__,file=sys.stderr)
         raise SystemExit(1)
+
 

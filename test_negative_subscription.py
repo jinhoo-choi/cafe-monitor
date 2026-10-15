@@ -18,6 +18,72 @@ from test_negative_verification import fixture, MemoryQueue
 
 
 class ProductionRegression(unittest.TestCase):
+    def test_mixed_diagnostics_only_reach_owner_envelope(self):
+        from email import message_from_string
+        self.job,self.result=fixture(2)
+        self.job.update(mode='production',self_test=False)
+        for entry in self.job['input']['items']:entry['dataset']='live'
+        self.job['input']['seen_hash']=common.seen_snapshot()[1]
+        self.job['input']['collection']={'coverage':[{'status':'cookie_required'}],
+                                       'cookie_auth_status':'unverified','cookie_auth_verified':False}
+        self.job['input']['items'][1].update(body_status='missing',body_excerpt='')
+        self.result['posts'][1].update(verdict='needs_review',score=None,evidence_quotes=[])
+        self.result['groups']=self.result['groups'][:1]
+        self.rehash()
+        self.reload_queue()
+        self.assertTrue(bot.consume(self.queue,self.job['job_id']))
+        for call in self.server.sendmail.call_args_list:
+            mail=message_from_string(call.args[2])
+            body=mail.get_payload(0).get_payload(decode=True).decode('utf-8')
+            self.assertIn('주문이 계속 실패',body)
+            self.assertIn('224000000001',body)
+            self.assertNotIn('확인필요',mail['Subject'])
+            for diagnostic in ('NAVER_COOKIES_JSON','본문 미수집','회원 전용 본문 인증 미확인','224000000002'):
+                if call.args[1]==['owner@example.invalid']:
+                    self.assertIn(diagnostic,body)
+                else:
+                    self.assertNotIn(diagnostic,body)
+            self.assertIsNone(mail['Cc'])
+            self.assertIsNone(mail['Bcc'])
+
+    def test_executive_renderer_rejects_status_only_and_omits_deferred_notice(self):
+        import negative_mail
+        inputs,posts=common.validate(self.job,self.result,allow_production=True)
+        selected,_=common.selected_groups(self.result)
+        body=negative_mail.render(self.job,self.result,inputs,posts,selected,[{}],production=True,executive=True)
+        self.assertNotIn('이월 이슈',body)
+        with self.assertRaises(ValueError):
+            negative_mail.render(self.job,self.result,inputs,posts,[],[],production=True,executive=True)
+
+    def test_legacy_batch_isolates_review_panel_by_envelope(self):
+        import ast, html
+        from datetime import datetime
+        from email import message_from_string
+        import negative_mail
+        node=next(n for n in ast.parse(Path('monitor.py').read_text()).body
+                  if isinstance(n,ast.FunctionDef) and n.name=='send_alert_batch')
+        namespace=dict(vars(bot),DRY_RUN=False,API_STATS={},datetime=datetime,KST=common.KST,
+                       html=html,build_card=negative_mail.build_card,GMAIL_USER='owner@example.invalid',
+                       GMAIL_APP_PW='offline',RECIPIENTS=['ops@example.invalid'],CC_RECIPIENTS=[],
+                       log=lambda *args:None,_from_header=lambda:'owner@example.invalid',
+                       _addr_header=lambda value:value,_warn_refused=lambda *args:None)
+        exec(compile(ast.Module(body=[node],type_ignores=[]),'legacy-batch','exec'),namespace)
+        post={'title':'한국투자증권 주문 오류','url':'https://example.invalid/finding',
+              'matched_kw':'한국투자증권','score':3,'summary':'주문 오류 신고','reply':'주문 내역 확인',
+              'source':'blog','cafe_name':'블로그'}
+        unresolved={'title':'검토 대상','url':'https://example.invalid/review'}
+        namespace['send_alert_batch']([post],2,2,[unresolved])
+        for call in self.server.sendmail.call_args_list:
+            mail=message_from_string(call.args[2])
+            body=mail.get_payload(0).get_payload(decode=True).decode('utf-8')
+            self.assertIn('주문 오류 신고',body)
+            if call.args[1]==['owner@example.invalid']:
+                self.assertIn('본문 미수집',body)
+                self.assertIn('https://example.invalid/review',body)
+            else:
+                self.assertNotIn('본문 미수집',body)
+                self.assertNotIn('https://example.invalid/review',body)
+
     def setUp(self):
         self.stack=ExitStack()
         self.addCleanup(self.stack.close)
@@ -314,5 +380,6 @@ class ProductionRegression(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
 
 
