@@ -33,6 +33,8 @@ def settings(queue=None, live=False):
         raise ValueError('구독 운영 설정 불일치')
     if live and (value['engine'] != 'subscription' or value.get('production_enabled') is not True):
         raise RuntimeError('구독 운영 중지 — 유료 API 전환 없음')
+    if live and digest(json.loads(queue.source('negative_policy.json')[0])) != common.policy_hash():
+        raise RuntimeError('현재 분석 정책 원문 변경 — 재분석 전 발송 보류')
     return value
 
 

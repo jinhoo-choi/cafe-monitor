@@ -163,7 +163,7 @@ class ProductionRegression(unittest.TestCase):
         self.rehash()
         self.queue=MemoryQueue(self.job,self.result)
         self.remote_history=self.path.read_bytes()
-        self.queue.source=lambda path:(Path(bot.CONFIG_PATH).read_bytes(),'config') if path==bot.CONFIG_PATH else (self.remote_history,'history-blob')
+        self.queue.source=lambda path:(Path(bot.CONFIG_PATH).read_bytes(),'config') if path==bot.CONFIG_PATH else ((Path('negative_policy.json').read_bytes(),'policy') if path=='negative_policy.json' else (self.remote_history,'history-blob'))
         self.server=MagicMock()
         self.server.sendmail.return_value={}
         self.smtp=self.stack.enter_context(patch.object(bot.smtplib,'SMTP_SSL',return_value=self.server))
@@ -175,6 +175,16 @@ class ProductionRegression(unittest.TestCase):
     def reload_queue(self):
         self.queue.files[self.queue.path]=copy.deepcopy(self.job)
         self.queue.files['results/'+self.job['job_id']+'.json']=copy.deepcopy(self.result)
+
+    def test_live_policy_change_blocks_mail_and_keeps_pending_history(self):
+        original = self.queue.source
+        self.queue.source = lambda path: (b'{"policy_version":"negative-subscription-v1","changed":true}', 'changed') if path == 'negative_policy.json' else original(path)
+        before = self.path.read_bytes()
+        with self.assertRaisesRegex(RuntimeError, '정책 원문 변경'):
+            bot.consume(self.queue, self.job['job_id'])
+        self.server.sendmail.assert_not_called()
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(self.queue.get(self.queue.path)[0]['status'], 'pending')
 
     def test_recipient_receipts_history_push_and_ack_required_for_completed(self):
         self.assertTrue(bot.consume(self.queue,self.job['job_id']))
