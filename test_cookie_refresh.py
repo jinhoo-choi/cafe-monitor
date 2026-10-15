@@ -36,6 +36,37 @@ class FakeQueue:
 
 
 class CookieTests(unittest.TestCase):
+    def test_key_service_failure_is_bounded_and_not_mislabeled_permission(self):
+        with patch.dict(os.environ,{'ADMIN_GITHUB_TOKEN':'FAKE_SECRET','GITHUB_REPOSITORY':renewal.REPO}), \
+             patch('requests.get',return_value=MagicMock(status_code=500)) as get, \
+             patch.object(renewal.time,'sleep'):
+            with self.assertRaises(renewal.RenewalError) as raised:
+                renewal.secret_key()
+            self.assertEqual(str(raised.exception),'secret_preflight_failed')
+            self.assertEqual(raised.exception.http_status,500); self.assertEqual(get.call_count,3)
+
+    def test_secret_access_denial_has_safe_http_code_and_no_retry(self):
+        for code in [401,403,404]:
+            response=MagicMock(status_code=code)
+            with patch.dict(os.environ,{'ADMIN_GITHUB_TOKEN':'FAKE_SECRET','GITHUB_REPOSITORY':renewal.REPO}), \
+                 patch('requests.get',return_value=response) as get:
+                with self.assertRaises(renewal.RenewalError) as raised:
+                    renewal.secret_key()
+                self.assertEqual(raised.exception.http_status,code)
+                self.assertNotIn('FAKE_SECRET',str(raised.exception))
+                self.assertEqual(get.call_count,1)
+                self.assertEqual(get.call_args.kwargs['timeout'],20)
+
+    def test_transient_public_key_get_is_retried_without_login(self):
+        ok=MagicMock(status_code=200)
+        ok.json.return_value={'key':'FAKE_PUBLIC','key_id':'FAKE_ID'}
+        with patch.dict(os.environ,{'ADMIN_GITHUB_TOKEN':'FAKE_SECRET','GITHUB_REPOSITORY':renewal.REPO}), \
+             patch('requests.get',side_effect=[MagicMock(status_code=500),ok]) as get, \
+             patch.object(renewal.time,'sleep'), patch.object(renewal,'login_once') as login:
+            headers,key=renewal.secret_key()
+            self.assertEqual(key['key_id'],'FAKE_ID'); self.assertEqual(get.call_count,2)
+            login.assert_not_called()
+
     def setUp(self):
         self.network = patch.object(socket, 'create_connection', side_effect=AssertionError('network forbidden'))
         self.network.start()
