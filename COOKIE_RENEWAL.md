@@ -36,6 +36,8 @@
 
 Actions의 수동 실행은 기본 `check`다. `check`는 새 로그인·Secret·비공개 제어 상태 쓰기·메일 없이
 기존 인증만 확인하고, 정상으로 확인되지 않으면 실패 상태로 종료한다.
+`check_access`는 기존 ADMIN_GITHUB_TOKEN으로 Secrets 공개키 GET만 진단한다.
+쿠키 복원·브라우저·네이버 로그인·큐 쓰기·Secret PUT·메일은 실행하지 않는다.
 공개 `cookie_refresh_request.json`은 `operation`, `mode`, `request_id`만 받으며 `main`에서만 실행한다.
 `auto`는 확인되지 않은 상태에서도 공개 범위 수집을 지속할 수 있도록 종료 코드와 인증 상태를 구분한다.
 
