@@ -6,6 +6,8 @@
 - 탐지 없음 / 오류 시 발신자 전용 상태 이메일 발송
 """
 
+from notification_owner import OWNER_EMAIL
+
 import os
 import json
 import html
@@ -101,7 +103,7 @@ def _notify_send_failure(context: str, refused: dict):
         warn_msg = MIMEMultipart("alternative")
         warn_msg["Subject"] = f"이메일 일부 수신자 거부됨 - {context}"
         warn_msg["From"] = _from_header()
-        warn_msg["To"] = _addr_header(GMAIL_USER)
+        warn_msg["To"] = _addr_header(OWNER_EMAIL)
         warn_msg["Date"] = formatdate(localtime=True)
         warn_msg["Message-ID"] = make_msgid(domain="gmail.com")
         warn_msg.attach(MIMEText(
@@ -110,7 +112,7 @@ def _notify_send_failure(context: str, refused: dict):
         ))
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
             s.login(GMAIL_USER, GMAIL_APP_PW)
-            s.sendmail(GMAIL_USER, [GMAIL_USER], warn_msg.as_string())
+            s.sendmail(GMAIL_USER, [OWNER_EMAIL], warn_msg.as_string())
     except Exception as e:
         log(f"⚠️ 거부 알림 메일 발송 자체도 실패: {e}")
 
@@ -246,7 +248,7 @@ def log(msg):
 
 def send_status_email(status, detail=""):
     """
-    발신자(GMAIL_USER)에게만 발송하는 운영 상태 알림
+    지정 운영자(OWNER_EMAIL)에게만 발송하는 운영 상태 알림
     status: "no_result" | "error"
     """
     if DRY_RUN:
@@ -315,17 +317,17 @@ def send_status_email(status, detail=""):
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"]    = _from_header()
-    msg["To"]      = _addr_header(GMAIL_USER)
+    msg["To"]      = _addr_header(OWNER_EMAIL)
     msg["Date"]    = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid(domain="gmail.com")
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(GMAIL_USER, GMAIL_APP_PW)
-        refused = s.sendmail(GMAIL_USER, [GMAIL_USER], msg.as_string())
+        refused = s.sendmail(GMAIL_USER, [OWNER_EMAIL], msg.as_string())
     if refused:
         _notify_send_failure(f"상태 이메일({status})", refused)
-    log(f"상태 이메일 발송 ({status}) → {GMAIL_USER}")
+    log(f"상태 이메일 발송 ({status}) → {OWNER_EMAIL}")
 
 # ─────────────────────────────────────────
 # DB (중복 방지)
@@ -1356,8 +1358,12 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count, unresolved_posts
     else:
         bcc_all = []
         kind = "발신자 전용 (확인필요 단독)"
-    targets = list(dict.fromkeys([GMAIL_USER] + bcc_all))  # 본인 포함, 중복 제거(순서 유지)
+    targets = list(dict.fromkeys([OWNER_EMAIL] + ([GMAIL_USER] + bcc_all if total > 0 else [])))  # 본인 포함, 중복 제거(순서 유지)
 
+    # Operational review details remain in the owner copy only.
+    from negative_mail import render_email
+    executive_body = (render_email(alert_posts, crawled_count, keyword_count, now_kst=now_kst)
+                      if alert_posts else None)
     refused_all = {}
     # 개별발송(수신자 1명/호출)에서는 거부 시 sendmail()이 dict를 반환하는 게 아니라
     # SMTPRecipientsRefused 예외를 던짐(수신자 전원=1명 거부이므로). 예외를 잡지 않으면
@@ -1377,7 +1383,7 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count, unresolved_posts
             m["To"] = _addr_header(addr)
             m["Date"] = formatdate(localtime=True)
             m["Message-ID"] = make_msgid(domain="gmail.com")
-            m.attach(MIMEText(html_body, "html", "utf-8"))
+            m.attach(MIMEText(html_body if addr == OWNER_EMAIL else executive_body, "html", "utf-8"))
             try:
                 r = s.sendmail(GMAIL_USER, [addr], m.as_string())
                 if r:  # 단건 발송에선 이론상 빈 dict지만 방어적으로 유지
@@ -1760,6 +1766,7 @@ if __name__ == "__main__":
             print('부정여론 구독 일시정지; 발송0/API0')
     else:
         main()
+
 
 
 

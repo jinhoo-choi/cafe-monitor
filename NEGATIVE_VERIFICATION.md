@@ -50,3 +50,17 @@ negative_subscription_config.json의 engine을 paused로 바꿔 새 분석·발�
 - 비공개 회차 negative-verification-38502718385: verified·self_test=true, paid_ai_calls=0, production_recipients=0, production_seen_writes=0. SMTP 접수와 받은편지함 수신은 별도다.
 - 모바일 390px·데스크톱 900px 메일 미리보기에서 가로 넘침 없음. 원문·문구·HTML·수신자 영수증은 비공개 큐에만 저장한다.
 - 이 코드는 검수 전용이며 main 병합·운영 예약 전환·운영 메일 재발송을 수행하지 않았다.
+
+
+## 임원용 본문과 운영자용 진단 분리
+
+운영 발송은 `111715@koreainvestment.com`을 명시적으로 승인된 운영자 주소로 사용한다.
+SMTP 로그인·발신 계정 `GMAIL_USER`는 운영자 수신 주소와 독립적이다. 같은 회차라도 운영자는
+수집 오류, 쿠키 상태, 본문 미수집·귀속 확인, 이월 안내가 포함된 전용 사본을 받고,
+`NOTIFY_EMAIL`·`EMAIL_CC` 수신자는 확인된 부정 이슈 카드만 받는다. 주소별 개별
+SMTP envelope와 기존 접수·중복 방지 상태 관리는 유지한다. 확인된 이슈가 없으면
+기존대로 운영자에게만 상태 또는 확인필요 메일을 보내며 임원에게 정상 결과를
+지어내 보내지 않는다. 실제 고객의 주문 오류 등 이슈 원문·요약은 제거하지 않는다.
+
+회귀 검증: `python -m unittest -v test_negative_verification test_negative_subscription test_cookie_refresh test_cookie_provenance`
+(실제 SMTP·유료 API 호출 없이 검증)

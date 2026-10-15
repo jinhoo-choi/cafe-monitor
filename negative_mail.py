@@ -331,7 +331,7 @@ def _status_email(crawled_count, keyword_count, notices, instant, test):
 </table></td></tr></table></body></html>'''
 
 
-def render(job, result, inputs, posts, selected, deferred, production=False):
+def render(job, result, inputs, posts, selected, deferred, production=False, executive=False):
     collection = job['input'].get('collection', {})
     coverage = collection.get('coverage', [])
     crawled_count = sum(row.get('listed', 0) for row in coverage) if coverage else len(inputs)
@@ -359,6 +359,10 @@ def render(job, result, inputs, posts, selected, deferred, production=False):
         alerts.append(value)
     reviews = [_metadata(inputs[identifier], coverage) for identifier, post in posts.items() if post['verdict'] == 'needs_review']
     instant = datetime.now(KST)
+    if executive:
+        if not alerts:
+            raise ValueError('임원용 메일에는 확인된 부정 이슈가 필요합니다.')
+        return render_email(alerts, crawled_count, keyword_count, now_kst=instant)
     if not alerts and not reviews:
         return _status_email(crawled_count, keyword_count, ' '.join(notices), instant, not production)
     missing = sum(source.get('body_status') != 'collected' for identifier, source in inputs.items() if posts[identifier]['verdict'] == 'needs_review')
@@ -369,3 +373,4 @@ def render(job, result, inputs, posts, selected, deferred, production=False):
                         now_kst=instant, notice_html=_notice(' '.join(notices)),
                         test_badge='[TEST] 본인 전용 · ' if not production else '',
                         review_label=review_label, review_note=review_note)
+
