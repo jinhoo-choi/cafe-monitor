@@ -4,6 +4,20 @@ import cookie_auth
 
 
 class ProbeProvenance(unittest.TestCase):
+    def test_article_response_after_dom_ready_is_observed_before_decision(self):
+        page = MagicMock()
+        page.url = 'https://cafe.naver.com/f-e/cafes/100/articles/101'
+        page.frames = []
+        page.goto.return_value.status = 200
+        response = MagicMock()
+        response.url = 'https://article.cafe.naver.com/gw/v4/cafes/100/articles/101'
+        response.request.resource_type = 'xhr'
+        response.status = 401
+        handlers = []
+        page.on.side_effect = lambda event, callback: handlers.append(callback)
+        page.expect_response.return_value.__exit__.side_effect = lambda *args: handlers[0](response)
+        self.assertEqual(cookie_auth.page_status(page,page.url),'auth_required')
+
     def test_article_api_401_overrides_outer_page_200_and_menu(self):
         page = MagicMock()
         page.url = 'https://cafe.naver.com/f-e/cafes/100/articles/101'

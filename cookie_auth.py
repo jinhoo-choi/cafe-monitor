@@ -69,18 +69,27 @@ def page_status(page, url, diagnostic=None):
     """A public homepage or HTTP 200 never proves authenticated access."""
     target = re.search(r'/cafes/(\d+)/articles/(\d+)', urlparse(url).path)
     article_responses = []
+    def matching(response):
+        parsed = urlparse(response.url)
+        return bool(target and parsed.hostname in {'article.cafe.naver.com', 'apis.naver.com', 'cafe.naver.com'}
+            and re.search(r'/cafes/' + target[1] + '/articles/' + target[2] + r'/?$', parsed.path)
+            and response.request.resource_type in {'fetch', 'xhr'})
     def capture(response):
         try:
-            parsed = urlparse(response.url)
-            if (target and parsed.hostname in {'article.cafe.naver.com', 'apis.naver.com', 'cafe.naver.com'}
-                    and re.search(r'/cafes/' + target[1] + '/articles/' + target[2] + r'/?$', parsed.path)
-                    and response.request.resource_type in {'fetch', 'xhr'}):
+            if matching(response):
                 article_responses.append(response.status)
         except Exception:
             pass
     page.on('response', capture)
     try:
-        response = page.goto(url, wait_until='domcontentloaded', timeout=12000)
+        response = None
+        try:
+            # Article XHR can start after the sidebar has rendered. Register BEFORE navigation.
+            with page.expect_response(matching, timeout=16000):
+                response = page.goto(url, wait_until='domcontentloaded', timeout=12000)
+        except Exception:
+            if response is None:
+                raise
         if diagnostic is not None:
             diagnostic['http_status'] = response.status if response is not None else None
             diagnostic['final_host'] = urlparse(page.url).hostname
