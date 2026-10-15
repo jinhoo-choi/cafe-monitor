@@ -67,6 +67,18 @@ def readable(text):
 
 def page_status(page, url, diagnostic=None):
     """A public homepage or HTTP 200 never proves authenticated access."""
+    target = re.search(r'/cafes/(\d+)/articles/(\d+)', urlparse(url).path)
+    article_responses = []
+    def capture(response):
+        try:
+            parsed = urlparse(response.url)
+            if (target and parsed.hostname in {'article.cafe.naver.com', 'apis.naver.com', 'cafe.naver.com'}
+                    and re.search(r'/cafes/' + target[1] + '/articles/' + target[2] + r'/?$', parsed.path)
+                    and response.request.resource_type in {'fetch', 'xhr'}):
+                article_responses.append(response.status)
+        except Exception:
+            pass
+    page.on('response', capture)
     try:
         response = page.goto(url, wait_until='domcontentloaded', timeout=12000)
         if diagnostic is not None:
@@ -82,7 +94,6 @@ def page_status(page, url, diagnostic=None):
             'cafe.naver.com', 'ca-fe.naver.com', 'nid.naver.com'}]
         if diagnostic is not None:
             diagnostic['frame_hosts'] = sorted({urlparse(f.url).hostname for f in page.frames if urlparse(f.url).hostname})
-        target = re.search(r'/cafes/(\d+)/articles/(\d+)', urlparse(url).path)
         for frame in frames:
             if target and not re.search(r'/cafes/' + target[1] + r'/articles/' + target[2] + r'(?:[/?#]|$)', frame.url):
                 continue
@@ -95,6 +106,14 @@ def page_status(page, url, diagnostic=None):
             for element in frame.query_selector_all(BODY_SELECTOR):
                 if readable(element.inner_text()):
                     return 'body'
+        if diagnostic is not None:
+            diagnostic['article_http_statuses'] = sorted(set(article_responses))
+        # The SPA can show only the cafe menu after its article API returns 401.
+        # Do not mistake the outer page's HTTP 200 for successful article access.
+        if 401 in article_responses:
+            return 'auth_required'
+        if 403 in article_responses:
+            return 'permission_denied'
         # Only inspect access walls when no article body exists.
         if 'nidlogin' in urlparse(page.url).path:
             return 'auth_required'
@@ -113,6 +132,8 @@ def page_status(page, url, diagnostic=None):
     except Exception as error:
         if diagnostic is not None:
             diagnostic['error_type'] = type(error).__name__
+    finally:
+        page.remove_listener('response', capture)
     return 'unknown'
 
 
@@ -131,6 +152,18 @@ def access_status(browser, state, urls, checks=None):
         anonymous.close()
     # Each probe must independently fail without a cookie; public/removed/unknown posts are insufficient.
     if any(value not in {'auth_required', 'member_required'} for value in gates):
+        # A protected probe can still diagnose current access when another configured probe is public.
+        # It cannot turn the pair into healthy or authorize a login.
+        if checks is not None and storage_status(state) == 'present' and any(
+                gate in {'auth_required', 'member_required'} for gate in gates):
+            context = browser.new_context(storage_state=state)
+            try:
+                page = context.new_page()
+                checks['partial_authenticated'] = {
+                    str(i+1): page_status(page, url) for i, (url, gate) in enumerate(zip(urls, gates))
+                    if gate in {'auth_required', 'member_required'}}
+            finally:
+                context.close()
         return 'probe_unconfirmed'
     if storage_status(state) != 'present':
         return 'invalid'

@@ -4,6 +4,31 @@ import cookie_auth
 
 
 class ProbeProvenance(unittest.TestCase):
+    def test_article_api_401_overrides_outer_page_200_and_menu(self):
+        page = MagicMock()
+        page.url = 'https://cafe.naver.com/f-e/cafes/100/articles/101'
+        page.frames = []
+        page.goto.return_value.status = 200
+        response = MagicMock()
+        response.url = 'https://article.cafe.naver.com/gw/v4/cafes/100/articles/101?query=not-logged'
+        response.request.resource_type = 'xhr'
+        response.status = 401
+        page.on.side_effect = lambda event, callback: callback(response)
+        self.assertEqual(cookie_auth.page_status(page,page.url),'auth_required')
+        page.remove_listener.assert_called_once()
+
+    def test_an_unrelated_article_api_401_does_not_invalidate_current_article(self):
+        page = MagicMock()
+        page.url = 'https://cafe.naver.com/f-e/cafes/100/articles/101'
+        page.frames = []
+        page.goto.return_value.status = 200
+        response = MagicMock()
+        response.url = 'https://article.cafe.naver.com/gw/v4/cafes/100/articles/999'
+        response.request.resource_type = 'xhr'
+        response.status = 401
+        page.on.side_effect = lambda event, callback: callback(response)
+        self.assertEqual(cookie_auth.page_status(page,page.url),'unknown')
+
     def test_other_article_or_ad_body_cannot_prove_requested_post_access(self):
         page = MagicMock()
         page.url = 'https://cafe.naver.com/f-e/cafes/100/articles/101'
