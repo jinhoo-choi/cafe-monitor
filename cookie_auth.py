@@ -15,29 +15,47 @@ MEMBER_HINTS = ('카페 멤버만', '카페 회원만', '가입한 멤버만', '
 PERMISSION_HINTS = ('등급 이상', '읽기 권한', '접근 권한', '게시글이 삭제', '삭제된 게시글')
 
 
-def storage_status(state, instant=None):
+def storage_status(state, instant=None, diagnostic=None):
     """Only login cookies affect expiry; -1 is a session cookie."""
     instant = time.time() if instant is None else instant
+    if diagnostic is not None:
+        diagnostic['state_format'] = 'invalid'
+        diagnostic['auth_cookies'] = {name: 'missing' for name in sorted(CORE)}
     if not isinstance(state, dict) or not isinstance(state.get('cookies'), list):
         return 'invalid'
+    if diagnostic is not None:
+        diagnostic['state_format'] = 'valid'
     found = set()
     for cookie in state['cookies']:
         if not isinstance(cookie, dict):
+            if diagnostic is not None:
+                diagnostic['state_format'] = 'invalid'
             return 'invalid'
         if cookie.get('name') not in CORE:
             continue
+        name = cookie['name']
         domain = str(cookie.get('domain', '')).lstrip('.').lower()
         if domain != 'naver.com' and not domain.endswith('.naver.com'):
+            if diagnostic is not None and name not in found:
+                diagnostic['auth_cookies'][name] = 'domain_mismatch'
             continue
         if not isinstance(cookie.get('value'), str) or not cookie['value'].strip():
+            if diagnostic is not None and name not in found:
+                diagnostic['auth_cookies'][name] = 'empty'
             continue
         expiry = cookie.get('expires', -1)
         if (isinstance(expiry, bool) or not isinstance(expiry, (int, float))
                 or not math.isfinite(expiry) or expiry < -1):
+            if diagnostic is not None:
+                diagnostic['auth_cookies'][name] = 'invalid_expiry'
             return 'invalid'
         if expiry != -1 and expiry <= instant:
+            if diagnostic is not None and name not in found:
+                diagnostic['auth_cookies'][name] = 'expired'
             continue
-        found.add(cookie['name'])
+        found.add(name)
+        if diagnostic is not None:
+            diagnostic['auth_cookies'][name] = 'present'
     return 'present' if found == CORE else 'invalid'
 
 
@@ -185,6 +203,7 @@ def page_status(page, url, diagnostic=None):
 
 
 def access_status(browser, state, urls, checks=None):
+    state_status = storage_status(state, diagnostic=checks.setdefault('storage', {}) if checks is not None else None)
     if len(urls) != 2:
         return 'not_configured'
     anonymous = browser.new_context()
@@ -201,7 +220,7 @@ def access_status(browser, state, urls, checks=None):
     if any(value not in {'auth_required', 'member_required'} for value in gates):
         # A protected probe can still diagnose current access when another configured probe is public.
         # It cannot turn the pair into healthy or authorize a login.
-        if checks is not None and storage_status(state) == 'present' and any(
+        if checks is not None and state_status == 'present' and any(
                 gate in {'auth_required', 'member_required'} for gate in gates):
             context = browser.new_context(storage_state=state)
             try:
@@ -212,7 +231,7 @@ def access_status(browser, state, urls, checks=None):
             finally:
                 context.close()
         return 'probe_unconfirmed'
-    if storage_status(state) != 'present':
+    if state_status != 'present':
         return 'invalid'
     authenticated = browser.new_context(storage_state=state)
     try:
