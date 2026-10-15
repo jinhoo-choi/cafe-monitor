@@ -139,20 +139,26 @@ def store_secret(state, key):
 
 
 def login_once(browser):
-    context = browser.new_context()
+    context, phase = None, 'login_context_unknown'
     try:
+        context = browser.new_context()
         page = context.new_page()
+        phase = 'login_navigation_unknown'
         page.goto('https://nid.naver.com/nidlogin.login', wait_until='domcontentloaded', timeout=20000)
         if any(hint in page.inner_text('body') for hint in CHALLENGES):
             raise RenewalError('human_required')
+        phase = 'login_form_unknown'
         page.fill('#id', os.environ['NAVER_ID'])
         page.fill('#pw', os.environ['NAVER_PW'])
+        phase = 'login_submit_unknown'
         page.click('#log\\.login', timeout=10000)
         page.wait_for_timeout(2500)
+        phase = 'login_result_unknown'
         if any(hint in page.inner_text('body') for hint in CHALLENGES):
             raise RenewalError('human_required')
         if 'nidlogin' in page.url:
             raise RenewalError('login_failed')
+        phase = 'login_storage_unknown'
         state = context.storage_state()
         if storage_status(state) != 'present':
             raise RenewalError('login_failed')
@@ -160,9 +166,13 @@ def login_once(browser):
     except RenewalError:
         raise
     except Exception:
-        raise RenewalError('login_unknown') from None
+        raise RenewalError(phase) from None
     finally:
-        context.close()
+        if context is not None:
+            try:
+                context.close()
+            except Exception:
+                pass
 
 
 def owner_notice(queue, status):
