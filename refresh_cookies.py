@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import smtplib
 import tempfile
+import time
 from email.mime.text import MIMEText
 
 from cookie_auth import CHALLENGES, access_status, probe_urls, storage_status
@@ -20,6 +21,9 @@ REPO = 'jinhoo-choi/cafe-monitor'
 
 class RenewalError(Exception):
     """Only fixed, non-secret status codes may be stored or reported."""
+    def __init__(self, status, http_status=None):
+        super().__init__(status)
+        self.http_status = http_status
 
 
 def now():
@@ -90,10 +94,22 @@ def secret_key():
         raise RenewalError('secret_credentials_missing')
     headers = {'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json'}
     try:
-        response = requests.get(f'https://api.github.com/repos/{REPO}/actions/secrets/public-key',
-                                headers=headers, timeout=20)
+        for attempt in range(3):
+            try:
+                response = requests.get(f'https://api.github.com/repos/{REPO}/actions/secrets/public-key',
+                                        headers=headers, timeout=20)
+            except requests.RequestException:
+                if attempt == 2:
+                    raise RenewalError('secret_preflight_unknown') from None
+                time.sleep(attempt+1)
+                continue
+            if response.status_code in {429, 500, 502, 503, 504} and attempt < 2:
+                time.sleep(attempt+1)
+                continue
+            break
         if response.status_code != 200:
-            raise RenewalError('secret_permission_failed')
+            status = 'secret_permission_failed' if response.status_code in {401,403,404} else 'secret_preflight_failed'
+            raise RenewalError(status, response.status_code)
         data = response.json()
         if not data.get('key') or not data.get('key_id'):
             raise RenewalError('secret_permission_failed')
@@ -117,7 +133,7 @@ def store_secret(state, key):
     except Exception:
         raise RenewalError('storage_uncertain') from None
     if response.status_code not in {201, 204}:
-        raise RenewalError('storage_failed')
+        raise RenewalError('storage_failed', response.status_code)
 
 
 def login_once(browser):
@@ -241,8 +257,9 @@ def run(mode='auto'):
     except Exception as error:
         status = str(error) if isinstance(error, RenewalError) else 'unknown'
         notice = owner_notice(queue, status) if queue and mode != 'check' else 'not_sent'
+        details = {'http_status': error.http_status} if isinstance(error, RenewalError) and error.http_status else {}
         report(status, login_attempted=attempted, secret_updated=secret_updated, notification=notice,
-               access_status=access)
+               access_status=access, **details)
         return 0 if mode == 'auto' else 2
 
 
