@@ -1,5 +1,5 @@
 {
   "operation": "cookie_preflight",
-  "mode": "auto",
-  "request_id": "insight-secret-auto-approved-once-20261015T1000"
+  "mode": "check",
+  "request_id": "owner-priority-auth-check-20261015T1810"
 }
