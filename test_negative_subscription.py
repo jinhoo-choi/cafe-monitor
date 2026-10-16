@@ -40,7 +40,7 @@ class ProductionRegression(unittest.TestCase):
         with patch.dict(os.environ,{'GMAIL_USER':'sender@example.invalid'}):
             self.assertEqual(bot.recipients(0),('sender@example.invalid',[bot.OWNER_EMAIL]))
 
-    def test_error_cookie_and_verification_notices_use_fixed_owner(self):
+    def test_error_cookie_notices_use_gmail_and_verification_stays_unchanged(self):
         import refresh_cookies
         from email import message_from_string
         with patch.dict(os.environ,{'GMAIL_USER':'sender@example.invalid',
@@ -52,14 +52,15 @@ class ProductionRegression(unittest.TestCase):
             self.assertEqual(refresh_cookies.owner_notice(queue,'cookie_required'),'accepted')
             common.send_owner('owner diagnostic','diagnostic body',common.owner())
         self.assertEqual(self.server.sendmail.call_count,3)
-        for call in self.server.sendmail.call_args_list:
-            self.assertEqual(call.args[:2],('sender@example.invalid',[bot.OWNER_EMAIL]))
+        for call, recipient in zip(self.server.sendmail.call_args_list,
+                                   [bot.ERROR_EMAIL, bot.ERROR_EMAIL, bot.OWNER_EMAIL]):
+            self.assertEqual(call.args[:2],('sender@example.invalid',[recipient]))
             mail=message_from_string(call.args[2])
-            self.assertEqual(mail['To'],bot.OWNER_EMAIL)
+            self.assertEqual(mail['To'],recipient)
             self.assertIsNone(mail['Cc'])
             self.assertIsNone(mail['Bcc'])
 
-    def test_legacy_status_and_refusal_notices_use_fixed_owner(self):
+    def test_legacy_errors_use_gmail_and_normal_status_stays_unchanged(self):
         import ast, html
         from datetime import datetime
         from email import message_from_string
@@ -74,10 +75,16 @@ class ProductionRegression(unittest.TestCase):
         self.server.__enter__.return_value=self.server
         namespace['send_status_email']('error','offline diagnostic')
         namespace['_notify_send_failure']('offline test',{'exec@example.invalid':(550,b'refused')})
-        self.assertEqual(self.server.sendmail.call_count,2)
-        for call in self.server.sendmail.call_args_list:
-            self.assertEqual(call.args[:2],('sender@example.invalid',[bot.OWNER_EMAIL]))
-            self.assertEqual(message_from_string(call.args[2])['To'],bot.OWNER_EMAIL)
+        namespace['send_status_email']('warning','offline cookie warning')
+        namespace['send_status_email']('no_result')
+        self.assertEqual(self.server.sendmail.call_count,4)
+        for call, recipient in zip(self.server.sendmail.call_args_list,
+                                   [bot.ERROR_EMAIL] * 3 + [bot.OWNER_EMAIL]):
+            self.assertEqual(call.args[:2],('sender@example.invalid',[recipient]))
+            mail=message_from_string(call.args[2])
+            self.assertEqual(mail['To'],recipient)
+            self.assertIsNone(mail['Cc'])
+            self.assertIsNone(mail['Bcc'])
 
     def test_mixed_diagnostics_only_reach_owner_envelope(self):
         from email import message_from_string

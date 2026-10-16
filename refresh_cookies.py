@@ -1,5 +1,5 @@
 """Conditional Naver cookie renewal. No paid AI, group mail, seen writes or auth bypass."""
-from notification_owner import OWNER_EMAIL
+from notification_owner import ERROR_EMAIL
 
 import argparse
 import base64
@@ -196,10 +196,10 @@ def owner_notice(queue, status):
             'html', 'utf-8')
         message['Subject'] = '[쿠키갱신봇] ' + status
         message['From'] = address
-        message['To'] = OWNER_EMAIL
+        message['To'] = ERROR_EMAIL
         with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=20) as server:
             server.login(address, password)
-            refused = server.sendmail(address, [OWNER_EMAIL], message.as_string())
+            refused = server.sendmail(address, [ERROR_EMAIL], message.as_string())
         return 'failed' if refused else 'accepted'
     except Exception:
         return 'failed'

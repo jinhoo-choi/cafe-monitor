@@ -1,5 +1,5 @@
 """구독 운영: 기존 수집·수신자 유지, SMTP 영수증→이력 push→private ack."""
-from notification_owner import OWNER_EMAIL
+from notification_owner import OWNER_EMAIL, ERROR_EMAIL
 
 import base64
 from datetime import datetime, timedelta
@@ -300,7 +300,7 @@ def notify_error():
     body = '<p>부정여론봇 구독 경로를 보류했습니다. 유료 API로 전환하지 않았습니다.</p><p>수집·발송·이력 상태는 <a href="'+url+'">Actions 실행 기록</a>에서 확인해 주세요. 접수된 메일을 임의로 재발송하지 마세요.</p>'
     with smtplib.SMTP_SSL('smtp.gmail.com',465,timeout=20) as server:
         server.login(sender,os.environ['GMAIL_APP_PW'])
-        refused = server.sendmail(sender,[OWNER_EMAIL],message('[부정여론봇] 구독 경로 오류',body,sender,OWNER_EMAIL))
+        refused = server.sendmail(sender,[ERROR_EMAIL],message('[부정여론봇] 구독 경로 오류',body,sender,ERROR_EMAIL))
     if refused:
         raise RuntimeError('본인 오류 알림 거부')
     print('본인 오류 알림 SMTP accepted 1건; API0')
