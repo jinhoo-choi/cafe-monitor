@@ -36,6 +36,44 @@ class FakeQueue:
 
 
 class CookieTests(unittest.TestCase):
+    def test_validated_state_is_captured_before_context_close_and_never_in_diagnostics(self):
+        browser, captured, checks = MagicMock(), {}, {}
+        updated = copy.deepcopy(STATE)
+        updated['cookies'][0]['value'] = 'FAKE-ROTATED-SECRET'
+        context = browser.new_context.return_value
+        context.storage_state.return_value = updated
+        context.close.side_effect = lambda: self.assertTrue(captured or not context.storage_state.called)
+        with patch.object(auth, 'page_status', side_effect=['auth_required','member_required','body','body']):
+            self.assertEqual(auth.access_status(browser, STATE, URLS, checks, captured), 'healthy')
+        self.assertEqual(captured, updated)
+        context.storage_state.assert_called_once()
+        self.assertNotIn('FAKE', json.dumps(checks))
+
+    def test_failed_probe_cannot_export_stale_or_unverified_storage(self):
+        for result in ['unknown', 'permission_denied', 'human_required', 'auth_required']:
+            browser, captured = MagicMock(), {'stale': 'FAKE'}
+            with patch.object(auth, 'page_status', side_effect=['auth_required','member_required',result,result]):
+                self.assertNotEqual(auth.access_status(browser, STATE, URLS, refreshed_state=captured), 'healthy')
+            self.assertEqual(captured, {})
+            browser.new_context.return_value.storage_state.assert_not_called()
+
+    def test_invalid_captured_state_does_not_authorize_session_save(self):
+        browser, captured = MagicMock(), {}
+        browser.new_context.return_value.storage_state.return_value = {'cookies': []}
+        with patch.object(auth, 'page_status', side_effect=['auth_required','member_required','body','body']):
+            self.assertEqual(auth.access_status(browser, STATE, URLS, refreshed_state=captured), 'unknown')
+        self.assertEqual(captured, {})
+
+    def test_login_timeout_diagnostic_cannot_leak_exception_message(self):
+        browser, checks = MagicMock(), {}
+        page = browser.new_context.return_value.new_page.return_value
+        page.inner_text.return_value = ''
+        page.click.side_effect = TimeoutError('FAKE_PASSWORD_COOKIE_PAGE_CONTENT')
+        with patch.dict(os.environ, NAVER_ID='FAKE', NAVER_PW='FAKE'):
+            with self.assertRaisesRegex(renewal.RenewalError, '^login_submit_unknown$'):
+                renewal.login_once(browser, checks=checks)
+        self.assertEqual(checks, {'login_error_type': 'timeout'})
+
     def test_login_failure_reports_only_fixed_phase_and_closes_context(self):
         stages = [('new_context', 'login_context_unknown'),
                   ('goto', 'login_navigation_unknown'), ('fill', 'login_form_unknown'),
@@ -220,6 +258,76 @@ class CookieTests(unittest.TestCase):
 
 
 class RunTests(unittest.TestCase):
+    def test_server_rotated_session_is_revalidated_saved_once_without_password_login(self):
+        updated = copy.deepcopy(STATE)
+        updated['cookies'][0]['value'] = 'FAKE-ROTATED-SECRET'
+        calls = []
+        def access(browser, state, urls, checks=None, refreshed_state=None):
+            calls.append(copy.deepcopy(state))
+            if refreshed_state is not None:
+                refreshed_state.update(updated)
+            return 'healthy'
+        with patch.object(renewal, 'access_status', side_effect=access), \
+             patch.object(renewal, 'live_queue', return_value=FakeQueue()), \
+             patch.object(renewal, 'secret_key', return_value='FAKE'), \
+             patch.object(renewal, 'store_secret') as secret, patch.object(renewal, 'login_once') as login, \
+             patch.object(renewal, 'reserve_attempt') as reserve, patch.object(renewal, 'owner_notice') as smtp:
+            self.assertEqual(renewal.run('auto'), 0)
+            self.assertEqual(calls, [STATE, updated])
+            secret.assert_called_once_with(updated, 'FAKE')
+            login.assert_not_called(); reserve.assert_not_called(); smtp.assert_not_called()
+        self.assertEqual(renewal.load_storage(), updated)
+        self.assertEqual(Path('naver_cookies.json').stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.reporter.call_args.kwargs['renewal_action'], 'session_updated')
+        self.assertNotIn('FAKE', str(self.reporter.call_args))
+
+    def test_tracking_only_changes_or_cookie_order_do_not_write_secrets(self):
+        for extra in [False, True]:
+            updated = copy.deepcopy(STATE)
+            updated['cookies'].reverse()
+            if extra:
+                updated['cookies'].append({'name':'tracking', 'value':'FAKE', 'domain':'.naver.com'})
+            def access(browser, state, urls, checks=None, refreshed_state=None):
+                refreshed_state.update(updated)
+                return 'healthy'
+            with patch.object(renewal, 'access_status', side_effect=access), \
+                 patch.object(renewal, 'live_queue') as queue, patch.object(renewal, 'store_secret') as secret:
+                self.assertEqual(renewal.run('auto'), 0)
+                queue.assert_not_called(); secret.assert_not_called()
+
+    def test_session_candidate_failure_preserves_cookie_and_never_attempts_login(self):
+        updated = copy.deepcopy(STATE)
+        updated['cookies'][0]['expires'] = 4_000_000_000
+        for outcome in ['unknown','permission_denied','human_required','key_failed','storage_uncertain']:
+            before = Path('naver_cookies.json').read_bytes()
+            def access(browser, state, urls, checks=None, refreshed_state=None):
+                if refreshed_state is not None:
+                    refreshed_state.update(updated)
+                    return 'healthy'
+                return 'healthy' if outcome in {'key_failed','storage_uncertain'} else outcome
+            with self.subTest(outcome=outcome), \
+                 patch.object(renewal, 'access_status', side_effect=access), \
+                 patch.object(renewal, 'live_queue', return_value=FakeQueue()), \
+                 patch.object(renewal, 'secret_key', side_effect=renewal.RenewalError('secret_permission_failed')
+                              if outcome == 'key_failed' else None), \
+                 patch.object(renewal, 'store_secret', side_effect=renewal.RenewalError('storage_uncertain')
+                              if outcome == 'storage_uncertain' else None) as secret, \
+                 patch.object(renewal, 'login_once') as login, patch.object(renewal, 'owner_notice'):
+                self.assertEqual(renewal.run('auto'), 0)
+                self.assertEqual(secret.call_count, 1 if outcome == 'storage_uncertain' else 0)
+                self.assertEqual(Path('naver_cookies.json').read_bytes(), before)
+                login.assert_not_called()
+                self.assertFalse(self.reporter.call_args.kwargs['secret_updated'])
+
+    def test_check_mode_never_captures_or_saves_server_updates(self):
+        def access(browser, state, urls, checks=None, refreshed_state=None):
+            self.assertIsNone(refreshed_state)
+            return 'healthy'
+        with patch.object(renewal, 'access_status', side_effect=access), \
+             patch.object(renewal, 'live_queue') as queue, patch.object(renewal, 'write_storage') as local:
+            self.assertEqual(renewal.run('check'), 0)
+            queue.assert_not_called(); local.assert_not_called()
+
     def test_access_diagnostic_cannot_login_store_or_notify_even_with_valid_key(self):
         for error in [None,renewal.RenewalError('secret_permission_failed',403)]:
             with patch.object(renewal,'secret_key',side_effect=error), \

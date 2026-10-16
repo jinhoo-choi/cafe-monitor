@@ -18,7 +18,11 @@
 
 ## 갱신과 비밀값
 
-- 정상 쿠키는 비밀번호 로그인과 Secret 쓰기 없이 유지한다.
+- 정상 쿠키는 비밀번호 로그인 없이 재사용한다. 두 회원 본문을 확인한 동일 컨텍스트에서
+  서버가 갱신한 상태를 메모리로 회수한다. 인증 쿠키가 같으면 Secret 쓰기 없이 유지한다.
+  인증 쿠키가 바뀐 경우에만 그 후보를 별도 컨텍스트의 두 회원 본문으로 재검증하고
+  Secret을 1회 암호화 교체한 뒤 0600 파일로 같은 실행에 적용한다.
+  추적 쿠키만 바뀐 경우 저장하지 않으며 만료 시각을 임의로 늘리지 않는다.
 - 실제 인증 실패가 확인된 경우에만 기존 `NAVER_ID`, `NAVER_PW`와 승인된 인사이트 전환용 키를 사용한다.
   인사이트 `INSIGHT_QUEUE_TOKEN`을 10/14 암호화 복사한 `NEGATIVE_QUEUE_TOKEN`을
   쿠키 단계의 `ADMIN_GITHUB_TOKEN` 환경변수에 연결한다. Secret 값을 로그·코드·채팅으로 읽거나
@@ -56,6 +60,14 @@ Actions의 수동 실행은 기본 `check`다. `check`는 새 로그인·Secret�
 `login_form_unknown`, `login_submit_unknown`, `login_result_unknown`,
 `login_storage_unknown`의 고정 코드로만 단계별 보고한다. 원시 예외 메시지,
 쿠키·페이지 본문·스크린샷은 출력하지 않는다. 24시간 재시도 제한과 추가 인증 중단 기준은 유지한다.
+예외 진단에는 고정 분류 `timeout` / `unexpected`만 추가한다.
+2026-10-16 공개 로그인 폼에서 확인한 `loginBtn_column` / `loginBtn_row` 중
+표시된 버튼을 1회 누른다. 구형 `log.login` 버튼 호환성도 유지한다.
+
+정상 세션의 담당자용 `renewal_action`은 `session_reused` / `session_updated`로 구분한다.
+`check` 모드는 서버 변경 상태를 저장하지 않는다. 변경 후보의 재검증 실패·Secret 권한 오류·
+저장 timeout에서는 기존 로컬 쿠키를 보존한다. 저장 timeout은 자동 PUT 재시도를 하지 않는다.
+갱신 상태는 로그용 `probe_checks`와 분리된 메모리 객체로만 전달한다.
 
 기존 쿠키 점검은 파일 존재 여부, 로그인 Secret 설정 여부(참/거짓), 저장 형식과
 `NID_AUT`/`NID_SES`의 고정 상태 코드만 진단한다. 만료·누락·빈 값·도메인 불일치·만료 형식 오류를

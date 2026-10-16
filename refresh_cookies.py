@@ -13,7 +13,7 @@ import tempfile
 import time
 from email.mime.text import MIMEText
 
-from cookie_auth import CHALLENGES, access_status, probe_urls, storage_status
+from cookie_auth import CORE, CHALLENGES, access_status, probe_urls, storage_status
 
 COOKIE_FILE = Path('naver_cookies.json')
 REPORT_FILE = Path('naver_cookie_status.json')
@@ -138,7 +138,7 @@ def store_secret(state, key):
         raise RenewalError('storage_failed', response.status_code)
 
 
-def login_once(browser):
+def login_once(browser, checks=None):
     context, phase = None, 'login_context_unknown'
     try:
         context = browser.new_context()
@@ -151,7 +151,7 @@ def login_once(browser):
         page.fill('#id', os.environ['NAVER_ID'])
         page.fill('#pw', os.environ['NAVER_PW'])
         phase = 'login_submit_unknown'
-        page.click('#log\\.login', timeout=10000)
+        page.click('#loginBtn_column:visible, #loginBtn_row:visible, [id="log.login"]:visible', timeout=10000)
         page.wait_for_timeout(2500)
         phase = 'login_result_unknown'
         if any(hint in page.inner_text('body') for hint in CHALLENGES):
@@ -165,7 +165,10 @@ def login_once(browser):
         return state
     except RenewalError:
         raise
-    except Exception:
+    except Exception as error:
+        if checks is not None:
+            # The exception message can contain credentials and page text. Keep only a fixed category.
+            checks['login_error_type'] = 'timeout' if type(error).__name__ == 'TimeoutError' else 'unexpected'
         raise RenewalError(phase) from None
     finally:
         if context is not None:
@@ -248,10 +251,31 @@ def run(mode='auto'):
             browser = playwright.chromium.launch(headless=True)
             try:
                 state = load_storage()
-                status = access_status(browser, state, urls, checks=checks)
+                refreshed = {} if mode != 'check' else None
+                status = access_status(browser, state, urls, checks=checks, refreshed_state=refreshed)
                 access = status
                 if status == 'healthy':
-                    report(status, login_attempted=False, secret_updated=False, probe_checks=checks)
+                    changed = (refreshed and
+                        {json.dumps(c, sort_keys=True) for c in refreshed['cookies'] if c.get('name') in CORE} !=
+                        {json.dumps(c, sort_keys=True) for c in state['cookies'] if c.get('name') in CORE})
+                    if not changed:
+                        report(status, login_attempted=False, secret_updated=False,
+                               renewal_action='session_reused', probe_checks=checks)
+                        return 0
+                    queue = live_queue()
+                    key = secret_key()
+                    # Independently verify the exact candidate before replacing the Secret. No password login.
+                    if access_status(browser, refreshed, urls) != 'healthy':
+                        raise RenewalError('new_cookie_unverified')
+                    live_queue()
+                    store_secret(refreshed, key)
+                    secret_updated = True
+                    try:
+                        write_storage(refreshed)
+                    except Exception:
+                        raise RenewalError('renewed_local_failed') from None
+                    report(status, login_attempted=False, secret_updated=True,
+                           renewal_action='session_updated', probe_checks=checks)
                     return 0
                 if mode == 'check' or status != 'invalid':
                     report(status, login_attempted=False, secret_updated=False, probe_checks=checks)
@@ -264,7 +288,7 @@ def run(mode='auto'):
                     raise RenewalError('cooldown')
                 live_queue()
                 attempted = True
-                fresh = login_once(browser)
+                fresh = login_once(browser, checks=checks)
                 if access_status(browser, fresh, urls) != 'healthy':
                     raise RenewalError('new_cookie_unverified')
                 live_queue()
@@ -284,7 +308,7 @@ def run(mode='auto'):
         notice = owner_notice(queue, status) if queue and mode != 'check' else 'not_sent'
         details = {'http_status': error.http_status} if isinstance(error, RenewalError) and error.http_status else {}
         report(status, login_attempted=attempted, secret_updated=secret_updated, notification=notice,
-               access_status=access, **details)
+               access_status=access, probe_checks=checks, **details)
         return 0 if mode == 'auto' else 2
 
 
@@ -292,4 +316,3 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode', choices=['auto', 'check', 'check_access', 'renew'], default='auto')
     raise SystemExit(run(parser.parse_args().mode))
-
