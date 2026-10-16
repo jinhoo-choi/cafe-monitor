@@ -202,7 +202,10 @@ def page_status(page, url, diagnostic=None):
     return 'unknown'
 
 
-def access_status(browser, state, urls, checks=None):
+def access_status(browser, state, urls, checks=None, refreshed_state=None):
+    # Sensitive state stays separate from log-safe diagnostics and is returned only after both probes pass.
+    if refreshed_state is not None:
+        refreshed_state.clear()
     state_status = storage_status(state, diagnostic=checks.setdefault('storage', {}) if checks is not None else None)
     if len(urls) != 2:
         return 'not_configured'
@@ -241,6 +244,11 @@ def access_status(browser, state, urls, checks=None):
         if checks is not None:
             checks['authenticated'] = results
             checks['authenticated_details'] = details
+        if results == ['body', 'body'] and refreshed_state is not None:
+            fresh = authenticated.storage_state()
+            if storage_status(fresh) != 'present':
+                return 'unknown'
+            refreshed_state.update(fresh)
     finally:
         authenticated.close()
     if results == ['body', 'body']:

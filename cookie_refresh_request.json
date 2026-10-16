@@ -1,5 +1,5 @@
 {
   "operation": "cookie_preflight",
-  "mode": "check",
-  "request_id": "owner-auth-recovery-safe-storage-check-20261015T2010"
+  "mode": "auto",
+  "request_id": "owner-auth-recovery-auto-20261016T1008"
 }

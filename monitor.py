@@ -6,7 +6,7 @@
 - 탐지 없음 / 오류 시 발신자 전용 상태 이메일 발송
 """
 
-from notification_owner import OWNER_EMAIL
+from notification_owner import OWNER_EMAIL, ERROR_EMAIL
 
 import os
 import json
@@ -103,7 +103,7 @@ def _notify_send_failure(context: str, refused: dict):
         warn_msg = MIMEMultipart("alternative")
         warn_msg["Subject"] = f"이메일 일부 수신자 거부됨 - {context}"
         warn_msg["From"] = _from_header()
-        warn_msg["To"] = _addr_header(OWNER_EMAIL)
+        warn_msg["To"] = _addr_header(ERROR_EMAIL)
         warn_msg["Date"] = formatdate(localtime=True)
         warn_msg["Message-ID"] = make_msgid(domain="gmail.com")
         warn_msg.attach(MIMEText(
@@ -112,7 +112,7 @@ def _notify_send_failure(context: str, refused: dict):
         ))
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
             s.login(GMAIL_USER, GMAIL_APP_PW)
-            s.sendmail(GMAIL_USER, [OWNER_EMAIL], warn_msg.as_string())
+            s.sendmail(GMAIL_USER, [ERROR_EMAIL], warn_msg.as_string())
     except Exception as e:
         log(f"⚠️ 거부 알림 메일 발송 자체도 실패: {e}")
 
@@ -248,8 +248,8 @@ def log(msg):
 
 def send_status_email(status, detail=""):
     """
-    지정 운영자(OWNER_EMAIL)에게만 발송하는 운영 상태 알림
-    status: "no_result" | "error"
+    정상 탐지 없음은 OWNER_EMAIL, 오류·쿠키 경고는 ERROR_EMAIL로 발송.
+    status: "no_result" | "warning" | "error"
     """
     if DRY_RUN:
         log(f"[DRY_RUN] 상태메일({status}) 발송 생략")
@@ -314,20 +314,21 @@ def send_status_email(status, detail=""):
 </body>
 </html>"""
 
+    receiver = OWNER_EMAIL if status == "no_result" else ERROR_EMAIL
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"]    = _from_header()
-    msg["To"]      = _addr_header(OWNER_EMAIL)
+    msg["To"]      = _addr_header(receiver)
     msg["Date"]    = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid(domain="gmail.com")
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(GMAIL_USER, GMAIL_APP_PW)
-        refused = s.sendmail(GMAIL_USER, [OWNER_EMAIL], msg.as_string())
+        refused = s.sendmail(GMAIL_USER, [receiver], msg.as_string())
     if refused:
         _notify_send_failure(f"상태 이메일({status})", refused)
-    log(f"상태 이메일 발송 ({status}) → {OWNER_EMAIL}")
+    log(f"상태 이메일 발송 ({status}) → {receiver}")
 
 # ─────────────────────────────────────────
 # DB (중복 방지)
