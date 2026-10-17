@@ -88,6 +88,63 @@ class VerificationRegression(unittest.TestCase):
         self.assertEqual(next(iter(rows.values()))['score'],5.5)
         self.smtp.assert_not_called()
 
+    def test_date_only_previous_day_remains_a_24_hour_candidate(self):
+        from datetime import datetime
+        module=bot.collector()
+        class Clock(datetime):
+            @classmethod
+            def now(cls,tz=None):return cls(2026,10,17,13,0,tzinfo=bot.KST)
+        page=MagicMock()
+        rows=[]
+        for identifier,stamp in [('101','2026.10.16.'),('102','2026.10.15.'),('103','2026.10.17.')]:
+            row=MagicMock()
+            row.get_attribute.return_value=''
+            row.query_selector.return_value.inner_text.return_value='한국투자증권 테스트'
+            row.query_selector.return_value.get_attribute.return_value='/f-e/cafes/100/articles/'+identifier
+            cells=[MagicMock() for _ in range(4)]
+            for cell in cells:cell.inner_text.return_value=''
+            cells[3].inner_text.return_value=stamp
+            row.query_selector_all.return_value=cells
+            rows.append(row)
+        page.query_selector_all.return_value=rows
+        with patch.object(module,'datetime',Clock),patch.object(module,'log'):
+            posts=module.search_keyword(page,'offline','100','한투')
+        self.assertEqual([p['post_id'] for p in posts],['101','103'])
+
+    def test_collection_filters_by_real_article_time_or_holds_unknown_boundary(self):
+        from datetime import datetime,timezone
+        instant=datetime(2026,10,17,4,0,tzinfo=timezone.utc)
+        for stamp,count,uncertain in [('2026.10.16. 14:47',1,False),('2026.10.16. 12:47',0,False),('',1,True)]:
+            module=MagicMock()
+            module.CAFES=[{'id':'offline','num_id':'100','name':'offline','login_required':False}]
+            module.get_post_list.return_value=[{'post_id':'101','title':'한국투자증권 문의',
+                'url':'https://cafe.naver.com/f-e/cafes/100/articles/101','date_str':'2026.10.16'}]
+            module.get_blog_post_list.return_value=[]
+            def detail(*args,details=None):
+                if stamp:details['date_str']=stamp
+                return '실제 게시글 본문','한국투자증권 서비스 이용에 관한 실제 게시글 본문입니다.'
+            module.get_post_detail.side_effect=detail
+            queue=MemoryQueue(*fixture())
+            with self.subTest(stamp=stamp),patch.object(bot,'now',return_value=instant), \
+                 patch.object(bot,'collector',return_value=module), \
+                 patch('playwright.sync_api.sync_playwright'), \
+                 patch.dict(os.environ,{'GITHUB_RUN_ID':'date-boundary'}):
+                bot.collect(queue)
+            items=queue.get('jobs/negative-verification-date-boundary.json')[0]['input']['items']
+            self.assertEqual(len(items),count)
+            if items:self.assertEqual(items[0].get('collection_window_uncertain',False),uncertain)
+        self.smtp.assert_not_called()
+
+    def test_uncertain_publication_boundary_cannot_be_normal_or_negative(self):
+        self.job['input']['items'][0]['collection_window_uncertain']=True
+        self.job['input_hash']=queue_module.digest(self.job['input'])
+        self.result['input_hash']=self.job['input_hash']
+        with self.assertRaisesRegex(ValueError,'게시 시각'):
+            bot.validate(self.job,self.result)
+        self.result['posts'][0].update(verdict='needs_review',score=None)
+        self.result['groups']=[]
+        bot.validate(self.job,self.result)
+
     def test_owner_only_mail_records_verified_receipt_without_db_writes(self):
         bot.consume(self.queue,self.job['job_id'])
         state=self.queue.get(self.queue.path)[0]
