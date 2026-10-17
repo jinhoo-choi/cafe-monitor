@@ -28,10 +28,14 @@ class ProbeProvenance(unittest.TestCase):
         frame.url='https://cafe.naver.com/ca-fe/cafes/100/articles/101'
         body=MagicMock()
         body.inner_text.return_value='실제 한국투자증권 게시글 본문입니다.'
-        frame.query_selector.side_effect=lambda selector: body if selector=='.se-main-container' else None
+        date=MagicMock()
+        date.inner_text.return_value='2026.10.16. 14:47'
+        frame.query_selector.side_effect=lambda selector: {'.se-main-container':body,'.article_info .date':date}.get(selector)
         page.frames=[frame]
+        details={}
         with patch.object(module,'log'):
-            self.assertEqual(module.get_post_detail(page,page.url,'offline'),(body.inner_text.return_value,)*2)
+            self.assertEqual(module.get_post_detail(page,page.url,'offline',details=details),(body.inner_text.return_value,)*2)
+        self.assertEqual(details,{'date_str':'2026.10.16. 14:47'})
 
     def test_collector_rejects_another_article_frame_and_untrusted_host(self):
         import negative_verification
