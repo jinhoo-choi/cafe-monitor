@@ -644,16 +644,18 @@ def get_post_detail(page, post_url, cafe_id):
     - body_full: 키워드 실존 검증용 (전체 본문)
     실패(빈 본문) 시 대기시간을 늘려 최대 2회까지 재시도 - 일시적 렌더링 지연이
     "본문 미수집 - 확인필요"로 새는 것을 줄이기 위함."""
-    BODY_SELECTORS = [
-        ".se-main-container",
-        ".ArticleContentBox",
-        ".article-viewer",
-        ".ContentRenderer",
-        "#tbody",
-        ".article_body",
-        ".se-component-content",
-    ]
+    from cookie_auth import BODY_SELECTOR
+    BODY_SELECTORS = [selector.strip() for selector in BODY_SELECTOR.split(',')]
     SELECTOR_COMBINED = ", ".join(BODY_SELECTORS)
+    requested = urllib.parse.urlparse(post_url)
+    target = re.search(r'/cafes/(\d+)/articles/(\d+)', requested.path)
+
+    def _article_document(document):
+        parsed = urllib.parse.urlparse(document.url or '')
+        if parsed.hostname not in {'cafe.naver.com', 'ca-fe.naver.com'}:
+            return False
+        return bool(re.search(r'/cafes/'+target[1]+r'/articles/'+target[2]+r'(?:[/?#]|$)', parsed.path)
+                    if target else parsed.path == requested.path)
 
     def _attempt(nav_timeout, selector_timeout):
         """1회 시도: 페이지 로드 + iframe 4단계 탐색. 실패해도 예외 없이 빈 문자열 반환."""
@@ -669,10 +671,11 @@ def get_post_detail(page, post_url, cafe_id):
             page.wait_for_timeout(random.randint(1500, 2500))
 
         body = ""
+        frames = [frame for frame in page.frames if _article_document(frame)]
 
         # 1순위: ca-fe URL 패턴 iframe 우선 탐색 (실제 본문 렌더링 프레임)
         try:
-            for frame in page.frames:
+            for frame in frames:
                 frame_url = frame.url or ""
                 if "ca-fe" in frame_url and "articles" in frame_url:
                     for sel in BODY_SELECTORS:
@@ -693,7 +696,7 @@ def get_post_detail(page, post_url, cafe_id):
         # 2순위: naver.com 포함 전체 iframe 탐색 (메인 프레임 및 빈 프레임 제외)
         if not body:
             try:
-                for frame in page.frames:
+                for frame in frames:
                     frame_url = frame.url or ""
                     if (
                         "naver.com" in frame_url
@@ -719,7 +722,7 @@ def get_post_detail(page, post_url, cafe_id):
         # 3순위: 모든 iframe 대상 탐색 (URL 조건 없이)
         if not body:
             try:
-                for frame in page.frames:
+                for frame in frames:
                     frame_url = frame.url or ""
                     if frame_url == "about:blank":
                         continue
@@ -740,7 +743,7 @@ def get_post_detail(page, post_url, cafe_id):
                 log(f"  iframe(any) 접근 오류: {e}")
 
         # 4순위: 현재 page에서 직접 파싱
-        if not body:
+        if not body and _article_document(page):
             try:
                 for sel in BODY_SELECTORS:
                     el = page.query_selector(sel)
@@ -1767,6 +1770,7 @@ if __name__ == "__main__":
             print('부정여론 구독 일시정지; 발송0/API0')
     else:
         main()
+
 
 
 
