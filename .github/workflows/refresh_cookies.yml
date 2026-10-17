@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Gmail 본인 검수 4건: 운영 수신자·이력 쓰기 0'
+        description: '전일 14:47 게시글의 24시간 경계 실환경 검증: SMTP·이력0'
         type: choice
         options: [check]
         default: check
@@ -16,54 +16,70 @@ jobs:
   audit:
     if: github.ref == 'refs/heads/audit/negative-full-20261017'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: 검수 의존성 설치
-        run: pip install requests playwright jsonschema pyyaml pynacl
-      - name: 전체 오프라인 회귀 재확인
+        run: |
+          pip install requests playwright jsonschema pyyaml pynacl
+          playwright install --with-deps chromium
+      - name: 전체 오프라인 회귀 검증
         run: python -m unittest -q test_negative_verification test_negative_subscription test_cookie_refresh test_cookie_provenance
-      - name: main 운영 이력 읽기 전용 스냅샷
-        run: git show origin/main:seen_posts.json > /tmp/negative_production_seen.json
-      - name: Gmail 한 주소로만 시나리오 4건 발송 및 재소비 중복 방지 확인
+      - name: 저장된 세션 복원
+        env:
+          NAVER_COOKIE_STATE: ${{ secrets.NAVER_COOKIES_JSON }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          Path('naver_cookies.json').write_text(os.environ['NAVER_COOKIE_STATE'])
+          Path('naver_cookies.json').chmod(0o600)
+          PY
+      - name: 실제 검색 후보·게시 시각·24시간 경계 검증 — 로그인0·SMTP0·이력0
         env:
           NEGATIVE_QUEUE_TOKEN: ${{ secrets.NEGATIVE_QUEUE_TOKEN }}
-          NEGATIVE_SEEN_PATH: /tmp/negative_production_seen.json
-          TEST_MODE: '1'
-          GMAIL_USER: ${{ secrets.GMAIL_USER }}
-          GMAIL_APP_PW: ${{ secrets.GMAIL_APP_PW }}
-          NOTIFY_EMAIL: 'myboy3743@gmail.com'
-          EMAIL_CC: ''
           CLAUDE_API_KEY: ''
         run: |
           python - <<'PY'
-          import hashlib,json,os
+          from contextlib import redirect_stdout
+          from datetime import datetime,timedelta
+          from io import StringIO
+          import json,os
+          from playwright.sync_api import sync_playwright
           from negative_queue import Queue,now
-          from negative_verification import consume,owner,seen_snapshot
-          assert owner()=='myboy3743@gmail.com'
+          from negative_verification import collector,item,published,seen_snapshot
           queue=Queue()
           queue.preflight()
+          module=collector()
           before=seen_snapshot()[1]
-          reports=[]
-          for job_id in ["negative-test-backlog-20261017T041912Z","negative-test-mixed-20261017T041912Z","negative-test-none-20261017T041912Z","negative-test-fresh-20261017T043541Z"]:
-              consume(queue,job_id)
-              consume(queue,job_id)
-              job,_=queue.get('jobs/'+job_id+'.json')
-              assert job['status']=='verified' and job['self_test'] is True
-              assert job['production_recipients']==0 and job['production_seen_writes']==0
-              assert job['receipts']=={hashlib.sha256(owner().encode()).hexdigest():'accepted'}
-              reports.append({'job_id':job_id,'status':job['status'],'subject':job['test_subject'],'smtp_accepted':1})
+          with redirect_stdout(StringIO()),sync_playwright() as p:
+              browser=p.chromium.launch(headless=True)
+              context=browser.new_context(storage_state='naver_cookies.json')
+              page=context.new_page()
+              candidates=module.search_keyword(page,'divclub','31050378','한투')
+              entry=next((x for x in candidates if x['post_id']=='66113'),None)
+              assert entry is not None,'date-only candidate lost before detail verification'
+              details={}
+              _,body=module.get_post_detail(page,entry['url'],'divclub',details=details)
+              assert details.get('date_str')=='2026.10.16. 14:47'
+              instant=datetime.fromisoformat(published(details['date_str']))
+              assert now()-timedelta(hours=24)<=instant<=now()
+              current=item('divclub:66113',entry['title'],body,entry['url'],'cafe','live',details['date_str'])
+              assert current['body_status']=='collected'
+              context.close()
+              browser.close()
           assert before==seen_snapshot()[1]
-          report={'checked_at':now().isoformat(),'owner':owner(),'tests':reports,'smtp_accepted':len(reports),
-                  'production_recipients':0,'production_seen_writes':0,'paid_ai_calls':0,
-                  'reconsume_extra_sends':0,'seen_unchanged':True}
-          queue.put('checks/mail-audit-'+os.environ['GITHUB_RUN_ID']+'.json',report)
-          print(json.dumps({k:v for k,v in report.items() if k not in {'owner','tests'}}))
+          report={'checked_at':now().isoformat(),'candidate_found':True,'actual_publication_time_verified':True,
+                  'within_24_hours':True,'item':current,'smtp_calls':0,'paid_ai_calls':0,
+                  'production_seen_writes':0,'seen_unchanged':True}
+          queue.put('audits/date-boundary-'+os.environ['GITHUB_RUN_ID']+'.json',report)
+          print(json.dumps({k:v for k,v in report.items() if k!='item'}))
           PY
       - name: 운영 이력 변경 없음 확인
-        run: git diff --exit-code -- seen_posts.json monitor.py .github/workflows/monitor.yml
+        run: git diff --exit-code -- monitor.py seen_posts.json .github/workflows/monitor.yml
+      - name: 임시 인증자료 제거
+        if: always()
+        run: rm -f naver_cookies.json naver_cookie_status.json .naver_cookie_*
