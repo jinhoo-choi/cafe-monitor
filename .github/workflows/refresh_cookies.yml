@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: '본문 선택자 수정 후 카페 9건 재검증: 로그인·메일·운영이력0'
+        description: 'Gmail 본인 검수 4건: 운영 수신자·이력 쓰기 0'
         type: choice
         options: [check]
         default: check
@@ -19,65 +19,51 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: 검수 의존성 설치
-        run: |
-          pip install requests playwright jsonschema pyyaml pynacl
-          playwright install --with-deps chromium
-      - name: 전체 오프라인 회귀 검증
+        run: pip install requests playwright jsonschema pyyaml pynacl
+      - name: 전체 오프라인 회귀 재확인
         run: python -m unittest -q test_negative_verification test_negative_subscription test_cookie_refresh test_cookie_provenance
-      - name: 저장된 쿠키 복원
-        env:
-          NAVER_COOKIE_STATE: ${{ secrets.NAVER_COOKIES_JSON }}
-        run: |
-          python - <<'PY'
-          import os
-          from pathlib import Path
-          Path('naver_cookies.json').write_text(os.environ['NAVER_COOKIE_STATE'])
-          Path('naver_cookies.json').chmod(0o600)
-          PY
-      - name: 실제 카페 글 9건 본문 재검증 — API0·SMTP0·이력0
+      - name: main 운영 이력 읽기 전용 스냅샷
+        run: git show origin/main:seen_posts.json > /tmp/negative_production_seen.json
+      - name: Gmail 한 주소로만 시나리오 4건 발송 및 재소비 중복 방지 확인
         env:
           NEGATIVE_QUEUE_TOKEN: ${{ secrets.NEGATIVE_QUEUE_TOKEN }}
+          NEGATIVE_SEEN_PATH: /tmp/negative_production_seen.json
+          TEST_MODE: '1'
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PW: ${{ secrets.GMAIL_APP_PW }}
+          NOTIFY_EMAIL: 'myboy3743@gmail.com'
+          EMAIL_CC: ''
           CLAUDE_API_KEY: ''
         run: |
           python - <<'PY'
-          from contextlib import redirect_stdout
-          from io import StringIO
-          import json,os
-          from playwright.sync_api import sync_playwright
+          import hashlib,json,os
           from negative_queue import Queue,now
-          from negative_verification import collector,item,seen_snapshot
+          from negative_verification import consume,owner,seen_snapshot
+          assert owner()=='myboy3743@gmail.com'
           queue=Queue()
           queue.preflight()
-          baseline,_=queue.get('jobs/negative-verification-39001963983.json')
-          entries=[p for p in baseline['input']['items'] if p['source']=='cafe']
-          assert len(entries)==9
-          module=collector()
           before=seen_snapshot()[1]
-          recovered=[]
-          with redirect_stdout(StringIO()),sync_playwright() as p:
-              browser=p.chromium.launch(headless=True)
-              context=browser.new_context(storage_state='naver_cookies.json')
-              page=context.new_page()
-              for entry in entries:
-                  _,body=module.get_post_detail(page,entry['url'],entry['post_id'].split(':',1)[0])
-                  current=item(entry['post_id'],entry['title'],body,entry['url'],'cafe','live',entry['date_raw'])
-                  recovered.append(current)
-              context.close()
-              browser.close()
+          reports=[]
+          for job_id in ["negative-test-backlog-20261017T041912Z","negative-test-mixed-20261017T041912Z","negative-test-none-20261017T041912Z","negative-test-fresh-20261017T043541Z"]:
+              consume(queue,job_id)
+              consume(queue,job_id)
+              job,_=queue.get('jobs/'+job_id+'.json')
+              assert job['status']=='verified' and job['self_test'] is True
+              assert job['production_recipients']==0 and job['production_seen_writes']==0
+              assert job['receipts']=={hashlib.sha256(owner().encode()).hexdigest():'accepted'}
+              reports.append({'job_id':job_id,'status':job['status'],'subject':job['test_subject'],'smtp_accepted':1})
           assert before==seen_snapshot()[1]
-          counts={'items':len(recovered),'body_collected':sum(x['body_status']=='collected' for x in recovered),
-                  'body_missing':sum(x['body_status']!='collected' for x in recovered)}
-          report={'checked_at':now().isoformat(),'source_job':baseline['job_id'],'items':recovered,'counts':counts,
-                  'smtp_calls':0,'paid_ai_calls':0,'production_seen_writes':0,'seen_unchanged':True}
-          queue.put('audits/body-recheck-'+os.environ['GITHUB_RUN_ID']+'.json',report)
-          print(json.dumps({**counts,'smtp_calls':0,'paid_ai_calls':0,'production_seen_writes':0,'seen_unchanged':True}))
+          report={'checked_at':now().isoformat(),'owner':owner(),'tests':reports,'smtp_accepted':len(reports),
+                  'production_recipients':0,'production_seen_writes':0,'paid_ai_calls':0,
+                  'reconsume_extra_sends':0,'seen_unchanged':True}
+          queue.put('checks/mail-audit-'+os.environ['GITHUB_RUN_ID']+'.json',report)
+          print(json.dumps({k:v for k,v in report.items() if k not in {'owner','tests'}}))
           PY
-      - name: 운영 코드·이력 경로 변경 없음 확인
-        run: git diff --exit-code -- monitor.py seen_posts.json .github/workflows/monitor.yml
-      - name: 임시 인증자료 제거
-        if: always()
-        run: rm -f naver_cookies.json naver_cookie_status.json .naver_cookie_*
+      - name: 운영 이력 변경 없음 확인
+        run: git diff --exit-code -- seen_posts.json monitor.py .github/workflows/monitor.yml
