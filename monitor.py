@@ -6,6 +6,8 @@
 - 탐지 없음 / 오류 시 발신자 전용 상태 이메일 발송
 """
 
+from notification_owner import OWNER_EMAIL, ERROR_EMAIL
+
 import os
 import json
 import html
@@ -101,7 +103,7 @@ def _notify_send_failure(context: str, refused: dict):
         warn_msg = MIMEMultipart("alternative")
         warn_msg["Subject"] = f"이메일 일부 수신자 거부됨 - {context}"
         warn_msg["From"] = _from_header()
-        warn_msg["To"] = _addr_header(GMAIL_USER)
+        warn_msg["To"] = _addr_header(ERROR_EMAIL)
         warn_msg["Date"] = formatdate(localtime=True)
         warn_msg["Message-ID"] = make_msgid(domain="gmail.com")
         warn_msg.attach(MIMEText(
@@ -110,7 +112,7 @@ def _notify_send_failure(context: str, refused: dict):
         ))
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
             s.login(GMAIL_USER, GMAIL_APP_PW)
-            s.sendmail(GMAIL_USER, [GMAIL_USER], warn_msg.as_string())
+            s.sendmail(GMAIL_USER, [ERROR_EMAIL], warn_msg.as_string())
     except Exception as e:
         log(f"⚠️ 거부 알림 메일 발송 자체도 실패: {e}")
 
@@ -138,7 +140,7 @@ CAFES = [
     {"id": "dlxogns01",        "num_id": "23676262", "name": "배당 투자자 모임", "login_required": False},
     {"id": "engmstudy",        "num_id": "14028420", "name": "짠돌이카페", "login_required": False},
     {"id": "hayate1",          "num_id": "11560463", "name": "주식광장", "login_required": False},
-    {"id": "divclub",          "num_id": "31050378", "name": "은퇴후 50년", "login_required": True},
+    {"id": "divclub",          "num_id": "31050378", "name": "배당 투자자 모임", "login_required": True},
     {"id": "moneyinsights",    "num_id": "31449216", "name": "돈이 되는 모든 정보", "login_required": False},
 ]
 
@@ -246,8 +248,8 @@ def log(msg):
 
 def send_status_email(status, detail=""):
     """
-    발신자(GMAIL_USER)에게만 발송하는 운영 상태 알림
-    status: "no_result" | "error"
+    정상 탐지 없음은 OWNER_EMAIL, 오류·쿠키 경고는 ERROR_EMAIL로 발송.
+    status: "no_result" | "warning" | "error"
     """
     if DRY_RUN:
         log(f"[DRY_RUN] 상태메일({status}) 발송 생략")
@@ -312,20 +314,21 @@ def send_status_email(status, detail=""):
 </body>
 </html>"""
 
+    receiver = OWNER_EMAIL if status == "no_result" else ERROR_EMAIL
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"]    = _from_header()
-    msg["To"]      = _addr_header(GMAIL_USER)
+    msg["To"]      = _addr_header(receiver)
     msg["Date"]    = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid(domain="gmail.com")
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
         s.login(GMAIL_USER, GMAIL_APP_PW)
-        refused = s.sendmail(GMAIL_USER, [GMAIL_USER], msg.as_string())
+        refused = s.sendmail(GMAIL_USER, [receiver], msg.as_string())
     if refused:
         _notify_send_failure(f"상태 이메일({status})", refused)
-    log(f"상태 이메일 발송 ({status}) → {GMAIL_USER}")
+    log(f"상태 이메일 발송 ({status}) → {receiver}")
 
 # ─────────────────────────────────────────
 # DB (중복 방지)
@@ -641,16 +644,18 @@ def get_post_detail(page, post_url, cafe_id):
     - body_full: 키워드 실존 검증용 (전체 본문)
     실패(빈 본문) 시 대기시간을 늘려 최대 2회까지 재시도 - 일시적 렌더링 지연이
     "본문 미수집 - 확인필요"로 새는 것을 줄이기 위함."""
-    BODY_SELECTORS = [
-        ".se-main-container",
-        ".ArticleContentBox",
-        ".article-viewer",
-        ".ContentRenderer",
-        "#tbody",
-        ".article_body",
-        ".se-component-content",
-    ]
+    from cookie_auth import BODY_SELECTOR
+    BODY_SELECTORS = [selector.strip() for selector in BODY_SELECTOR.split(',')]
     SELECTOR_COMBINED = ", ".join(BODY_SELECTORS)
+    requested = urllib.parse.urlparse(post_url)
+    target = re.search(r'/cafes/(\d+)/articles/(\d+)', requested.path)
+
+    def _article_document(document):
+        parsed = urllib.parse.urlparse(document.url or '')
+        if parsed.hostname not in {'cafe.naver.com', 'ca-fe.naver.com'}:
+            return False
+        return bool(re.search(r'/cafes/'+target[1]+r'/articles/'+target[2]+r'(?:[/?#]|$)', parsed.path)
+                    if target else parsed.path == requested.path)
 
     def _attempt(nav_timeout, selector_timeout):
         """1회 시도: 페이지 로드 + iframe 4단계 탐색. 실패해도 예외 없이 빈 문자열 반환."""
@@ -666,10 +671,11 @@ def get_post_detail(page, post_url, cafe_id):
             page.wait_for_timeout(random.randint(1500, 2500))
 
         body = ""
+        frames = [frame for frame in page.frames if _article_document(frame)]
 
         # 1순위: ca-fe URL 패턴 iframe 우선 탐색 (실제 본문 렌더링 프레임)
         try:
-            for frame in page.frames:
+            for frame in frames:
                 frame_url = frame.url or ""
                 if "ca-fe" in frame_url and "articles" in frame_url:
                     for sel in BODY_SELECTORS:
@@ -690,7 +696,7 @@ def get_post_detail(page, post_url, cafe_id):
         # 2순위: naver.com 포함 전체 iframe 탐색 (메인 프레임 및 빈 프레임 제외)
         if not body:
             try:
-                for frame in page.frames:
+                for frame in frames:
                     frame_url = frame.url or ""
                     if (
                         "naver.com" in frame_url
@@ -716,7 +722,7 @@ def get_post_detail(page, post_url, cafe_id):
         # 3순위: 모든 iframe 대상 탐색 (URL 조건 없이)
         if not body:
             try:
-                for frame in page.frames:
+                for frame in frames:
                     frame_url = frame.url or ""
                     if frame_url == "about:blank":
                         continue
@@ -737,7 +743,7 @@ def get_post_detail(page, post_url, cafe_id):
                 log(f"  iframe(any) 접근 오류: {e}")
 
         # 4순위: 현재 page에서 직접 파싱
-        if not body:
+        if not body and _article_document(page):
             try:
                 for sel in BODY_SELECTORS:
                     el = page.query_selector(sel)
@@ -1356,8 +1362,12 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count, unresolved_posts
     else:
         bcc_all = []
         kind = "발신자 전용 (확인필요 단독)"
-    targets = list(dict.fromkeys([GMAIL_USER] + bcc_all))  # 본인 포함, 중복 제거(순서 유지)
+    targets = list(dict.fromkeys([OWNER_EMAIL] + ([GMAIL_USER] + bcc_all if total > 0 else [])))  # 본인 포함, 중복 제거(순서 유지)
 
+    # Operational review details remain in the owner copy only.
+    from negative_mail import render_email
+    executive_body = (render_email(alert_posts, crawled_count, keyword_count, now_kst=now_kst)
+                      if alert_posts else None)
     refused_all = {}
     # 개별발송(수신자 1명/호출)에서는 거부 시 sendmail()이 dict를 반환하는 게 아니라
     # SMTPRecipientsRefused 예외를 던짐(수신자 전원=1명 거부이므로). 예외를 잡지 않으면
@@ -1377,7 +1387,7 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count, unresolved_posts
             m["To"] = _addr_header(addr)
             m["Date"] = formatdate(localtime=True)
             m["Message-ID"] = make_msgid(domain="gmail.com")
-            m.attach(MIMEText(html_body, "html", "utf-8"))
+            m.attach(MIMEText(html_body if addr == OWNER_EMAIL else executive_body, "html", "utf-8"))
             try:
                 r = s.sendmail(GMAIL_USER, [addr], m.as_string())
                 if r:  # 단건 발송에선 이론상 빈 dict지만 방어적으로 유지
@@ -1760,6 +1770,8 @@ if __name__ == "__main__":
             print('부정여론 구독 일시정지; 발송0/API0')
     else:
         main()
+
+
 
 
 

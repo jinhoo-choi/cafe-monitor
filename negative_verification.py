@@ -1,4 +1,6 @@
 """실제 수집→구독 분석 결과 검증→본인 SMTP 검수. 운영 main·DB·API는 실행하지 않는다."""
+from notification_owner import ERROR_EMAIL
+
 import copy
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
@@ -19,12 +21,17 @@ import smtplib
 from urllib.parse import urlparse
 
 import jsonschema
+from cookie_auth import collector_auth
 
 from negative_queue import BOT_ID, JOB_ID, POLICY, PREFIX, REPOSITORY, digest, now
 
 KST = timezone(timedelta(hours=9))
 MASKS = ('[이메일]', '[연락처]', '[계좌]', '[주민번호]', '[외부주소]')
 ALIASES = ('한국투자증권', '한투', '뱅키스', 'BanKIS')
+
+
+def policy_hash():
+    return digest(json.loads(Path('negative_policy.json').read_text(encoding='utf-8')))
 
 
 def brand_present(text):
@@ -189,29 +196,30 @@ def collect(queue, fixture_id=None, production=False):
     with redirect_stdout(log_capture), sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         cookie_path = Path('naver_cookies.json')
-        cookie_loaded = cookie_path.exists()
+        try:
+            cookie_state = json.loads(cookie_path.read_text())
+        except (OSError, ValueError):
+            cookie_state = None
+        try:
+            cookie_report = json.loads(Path('naver_cookie_status.json').read_text())
+        except (OSError, ValueError):
+            cookie_report = None
+        cookie_loaded, cookie_auth_status, cookie_auth_verified = collector_auth(cookie_state, cookie_report)
         cookie_expiring = []
         if cookie_loaded:
             try:
                 limit = now().timestamp()
                 cookie_expiring = sorted({c['name'] for c in json.loads(cookie_path.read_text()).get('cookies', [])
-                    if c.get('name') in {'NID_AUT', 'NID_SES', 'nid_inf'} and limit < c.get('expires', -1) < limit+7*86400})
+                    if c.get('name') in {'NID_AUT', 'NID_SES'} and limit < c.get('expires', -1) < limit+7*86400})
             except (OSError, ValueError, TypeError, KeyError):
                 pass
         context = browser.new_context(storage_state=str(cookie_path)) if cookie_loaded else browser.new_context()
         page = context.new_page()
-        if cookie_loaded:
-            try:
-                page.goto('https://www.naver.com', wait_until='domcontentloaded', timeout=20000)
-                if 'nid.naver.com' in page.url:
-                    cookie_loaded = False
-                    context.close()
-                    context = browser.new_context()
-                    page = context.new_page()
-            except Exception:
-                cookie_loaded = False
         for cafe in module.CAFES:
             record = {'source': cafe['id'], 'name': cafe['name'], 'status': 'ok', 'listed': 0, 'unseen': 0, 'selected': 0}
+            if cafe.get('login_required', True):
+                record['auth_status'] = cookie_auth_status
+                record['auth_verified'] = cookie_auth_verified
             coverage.append(record)
             if not cookie_loaded and cafe.get('login_required', True):
                 record['status'] = 'cookie_required'
@@ -316,9 +324,10 @@ def collect(queue, fixture_id=None, production=False):
     job = {'schema_version': 1, 'bot_id': BOT_ID, 'mode': 'production' if production else 'verification', 'self_test': not production,
            'job_id': job_id, 'status': 'pending', 'created_at': now().isoformat(),
            'expires_at': (now()+timedelta(minutes=settings['job_ttl_minutes'])).isoformat(),
-           'input': {'policy_version': POLICY, 'seen_hash': state_hash, 'items': list(by_id.values()),
+           'input': {'policy_version': POLICY, 'policy_hash': policy_hash(), 'seen_hash': state_hash, 'items': list(by_id.values()),
                      'collection': {'coverage': coverage, 'historical': historical, 'cookie_loaded': cookie_loaded,
-                                    'cookie_expiring': cookie_expiring}},
+                                    'cookie_expiring': cookie_expiring, 'cookie_auth_status': cookie_auth_status,
+                                    'cookie_auth_verified': cookie_auth_verified}},
            'receipts': {}, 'paid_ai_calls': 0}
     job['input_hash'] = digest(job['input'])
     queue.put('jobs/'+job_id+'.json', job)
@@ -345,6 +354,8 @@ def validate(job, result, allow_production=False):
         raise ValueError('검수 입력 만료')
     if job['input'].get('policy_version') != POLICY or job['input_hash'] != digest(job['input']):
         raise ValueError('입력 해시 또는 정책 불일치')
+    if job['input'].get('policy_hash') != policy_hash() or result.get('policy_hash') != job['input']['policy_hash']:
+        raise ValueError('분석 정책 원문 해시 불일치')
     schema = json.loads(Path('negative_result_schema.json').read_text())
     jsonschema.Draft202012Validator(schema).validate(result)
     if result['job_id'] != job['job_id'] or result['input_hash'] != job['input_hash']:
@@ -463,24 +474,25 @@ def render(job, result, production=False):
 def owner():
     address = os.environ.get('GMAIL_USER','').strip()
     if (os.environ.get('TEST_MODE')!='1' or not address or not os.environ.get('GMAIL_APP_PW')
-            or os.environ.get('NOTIFY_EMAIL','').strip()!=address or os.environ.get('EMAIL_CC','').strip()):
+            or os.environ.get('NOTIFY_EMAIL','').strip()!=ERROR_EMAIL or os.environ.get('EMAIL_CC','').strip()):
         raise RuntimeError('본인 검수 수신자 격리 설정 실패')
-    return address
+    return ERROR_EMAIL
 
 
 def send_owner(subject, body, address):
     if address != owner():
         raise RuntimeError('본인 이외 envelope 수신자 금지')
+    sender = os.environ['GMAIL_USER'].strip()
     message = MIMEMultipart('alternative')
     message['Subject'] = subject
-    message['From'] = formataddr((str(Header('부정여론봇','utf-8')), address))
+    message['From'] = formataddr((str(Header('부정여론봇','utf-8')), sender))
     message['To'] = address
     message['Date'] = formatdate(localtime=True)
     message['Message-ID'] = make_msgid(domain='gmail.com')
     message.attach(MIMEText(body,'html','utf-8'))
     with smtplib.SMTP_SSL('smtp.gmail.com',465,timeout=20) as server:
-        server.login(address,os.environ['GMAIL_APP_PW'])
-        refused = server.sendmail(address,[address],message.as_string())
+        server.login(os.environ['GMAIL_USER'].strip(),os.environ['GMAIL_APP_PW'])
+        refused = server.sendmail(sender,[address],message.as_string())
     if refused:
         raise RuntimeError('본인 테스트메일 SMTP 거부')
 
@@ -507,10 +519,12 @@ def consume(queue, job_id):
         raise RuntimeError('검수 입력 이후 운영 이력 변경 — 본인 발송 보류')
     body = render(job,result)
     selected, deferred = selected_groups(result)
-    queue.put('previews/'+job_id+'.json',{'html':body,'paid_ai_calls':0})
-    queue.put('deferred/'+job_id+'.json',{'groups':deferred,'mode':'verification','production_seen_writes':0})
+    for output_path, value in (
+            ('previews/'+job_id+'.json',{'html':body,'paid_ai_calls':0}),
+            ('deferred/'+job_id+'.json',{'groups':deferred,'mode':'verification','production_seen_writes':0})):
+        queue.put(output_path,value,queue.get(output_path)[1])
     with smtplib.SMTP_SSL('smtp.gmail.com',465,timeout=20) as server:
-        server.login(address,os.environ['GMAIL_APP_PW'])
+        server.login(os.environ['GMAIL_USER'].strip(),os.environ['GMAIL_APP_PW'])
     latest, latest_sha = queue.get(path)
     if latest.get('status')!='pending' or latest.get('receipts') or latest['input_hash']!=job['input_hash']:
         raise RuntimeError('검수 발송 직전 상태 변경')
@@ -540,5 +554,7 @@ def consume(queue, job_id):
         raise
     print(json.dumps({'job_id':job_id,'status':'verified','self_test':True,'smtp_accepted':1,
                       'production_recipients':0,'production_seen_writes':0,'paid_ai_calls':0}))
+
+
 
 

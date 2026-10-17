@@ -1,208 +1,318 @@
-"""
-refresh_cookies.py
-- 네이버 로그인을 자동 수행해 새 세션 쿠키를 발급받고,
-  GitHub Secret(NAVER_COOKIES_JSON)에 자동 반영한다.
-- 워크플로우는 workflow_dispatch(수동 클릭)로만 실행됨 - 완전 자동 스케줄 아님.
-- 캡차/보안인증이 감지되면 즉시 중단하고 실패 메일만 발송한다 (재시도 없음 - 
-  반복 시도는 봇 탐지 패턴을 더 강화시킬 뿐이라 의도적으로 1회만 시도).
-"""
+"""Conditional Naver cookie renewal. No paid AI, group mail, seen writes or auth bypass."""
+from notification_owner import ERROR_EMAIL
 
-import os
-import re
-import json
+import argparse
 import base64
-import smtplib
-import requests
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.utils import formataddr, formatdate, make_msgid
-from email.header import Header
 from datetime import datetime, timedelta, timezone
-from playwright.sync_api import sync_playwright
-from nacl import encoding, public
+import html
+import json
+import os
+from pathlib import Path
+import smtplib
+import tempfile
+import time
+from email.mime.text import MIMEText
 
-KST = timezone(timedelta(hours=9))
+from cookie_auth import CORE, CHALLENGES, access_status, probe_urls, storage_status
 
-GMAIL_USER    = os.environ["GMAIL_USER"]
-GMAIL_APP_PW  = os.environ["GMAIL_APP_PW"]
-# 쿠키 갱신은 내부 운영 이슈이므로 임원 리스트(NOTIFY_EMAIL)가 아닌 본인(GMAIL_USER)에게만 발송
-RECIPIENTS    = [GMAIL_USER]
-NAVER_ID      = os.environ["NAVER_ID"]
-NAVER_PW      = os.environ["NAVER_PW"]
-ADMIN_TOKEN   = os.environ["ADMIN_GITHUB_TOKEN"]
-REPO          = os.environ.get("GITHUB_REPOSITORY", "")  # owner/repo, Actions가 자동 주입
-
-CAPTCHA_HINTS = [
-    "자동입력 방지", "보안문자", "captcha", "unusual", "비정상적인 접근",
-    "다른 사람이 회원님의 계정", "휴대전화 인증", "본인 확인",
-]
-
-BOT_NAME = "쿠키갱신봇"
+COOKIE_FILE = Path('naver_cookies.json')
+REPORT_FILE = Path('naver_cookie_status.json')
+CONTROL_PATH = 'auth/cookie_control.json'
+REPO = 'jinhoo-choi/cafe-monitor'
 
 
-def _from_header() -> str:
-    """발신자(From) 표시명 헤더. raw f-string 금지 - formataddr()+Header()로 RFC 2047 인코딩."""
-    return formataddr((str(Header(BOT_NAME, "utf-8")), GMAIL_USER))
+class RenewalError(Exception):
+    """Only fixed, non-secret status codes may be stored or reported."""
+    def __init__(self, status, http_status=None):
+        super().__init__(status)
+        self.http_status = http_status
 
 
-def _addr_header(addr: str) -> str:
-    """임의 주소(addr)에 봇 표시명을 씌운 헤더. To 필드 전용 (본인 계정 고정용)."""
-    return formataddr((str(Header(BOT_NAME, "utf-8")), addr))
+def now():
+    return datetime.now(timezone.utc)
 
 
-def log(msg):
-    print(f"[쿠키갱신] {msg}")
+def report(status, **details):
+    value = {'schema_version': 1, 'status': status, 'checked_at': now().isoformat(),
+             'paid_ai_calls': 0, **details}
+    REPORT_FILE.write_text(json.dumps(value), encoding='utf-8')
+    REPORT_FILE.chmod(0o600)
+    print('[쿠키갱신] ' + json.dumps(value, ensure_ascii=False))
+    return value
 
-def send_email(subject, body_html):
-    now_str = datetime.now(KST).strftime("%Y.%m.%d %H:%M")
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"{subject} | {now_str} KST"
-    msg["From"] = _from_header()
-    msg["To"] = _addr_header(GMAIL_USER)
-    msg["Date"] = formatdate(localtime=True)
-    msg["Message-ID"] = make_msgid(domain="gmail.com")
-    msg.attach(MIMEText(body_html, "html", "utf-8"))
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
-        s.login(GMAIL_USER, GMAIL_APP_PW)
-        refused = s.sendmail(GMAIL_USER, RECIPIENTS, msg.as_string())
-    if refused:
-        log(f"⚠️ 일부 수신자 거부됨: {list(refused.keys())}")
 
-def encrypt_secret(pub_key_b64, secret_value):
-    pub_key = public.PublicKey(pub_key_b64.encode(), encoding.Base64Encoder())
-    sealed_box = public.SealedBox(pub_key)
-    encrypted = sealed_box.encrypt(secret_value.encode())
-    return base64.b64encode(encrypted).decode()
-
-def update_github_secret(secret_name, secret_value):
-    headers = {"Authorization": f"token {ADMIN_TOKEN}"}
-    r = requests.get(f"https://api.github.com/repos/{REPO}/actions/secrets/public-key", headers=headers)
-    r.raise_for_status()
-    key_data = r.json()
-    encrypted = encrypt_secret(key_data["key"], secret_value)
-    resp = requests.put(
-        f"https://api.github.com/repos/{REPO}/actions/secrets/{secret_name}",
-        headers=headers,
-        json={"encrypted_value": encrypted, "key_id": key_data["key_id"]},
-    )
-    resp.raise_for_status()
-    return resp.status_code
-
-def looks_like_verification_wall(page):
-    """캡차/보안인증 등 사람 확인 절차가 떴는지 감지"""
+def write_storage(state):
+    handle, name = tempfile.mkstemp(prefix='.naver_cookie_', dir='.')
     try:
-        page_text = page.inner_text("body")
-    except Exception:
-        page_text = ""
-    for hint in CAPTCHA_HINTS:
-        if hint in page_text:
-            return hint
-    return None
+        with os.fdopen(handle, 'w') as stream:
+            json.dump(state, stream, ensure_ascii=False)
+        os.replace(name, COOKIE_FILE)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
 
-def main():
-    log("네이버 로그인 자동 갱신 시작")
+
+def load_storage():
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context()
-            page = context.new_page()
+        return json.loads(COOKIE_FILE.read_text())
+    except (OSError, ValueError):
+        return None
 
-            page.goto("https://nid.naver.com/nidlogin.login", wait_until="domcontentloaded", timeout=20000)
-            page.wait_for_timeout(1500)
 
-            # 아이디/비밀번호 입력 - fill() 사용 (키 입력 시뮬레이션보다 붙여넣기에 가까워
-            # 타이핑 패턴 기반 탐지를 덜 유발함)
-            page.fill("#id", NAVER_ID)
-            page.wait_for_timeout(300)
-            page.fill("#pw", NAVER_PW)
-            page.wait_for_timeout(300)
+def reserve_attempt(queue, instant, run_id):
+    """Durable SHA-checked reservation BEFORE login, including cancellation/failure cooldown."""
+    control, sha = queue.get(CONTROL_PATH)
+    control = control or {'schema_version': 1}
+    previous = control.get('last_attempt_at')
+    if previous:
+        try:
+            timestamp = datetime.fromisoformat(previous)
+            if timestamp.tzinfo is None or instant - timestamp < timedelta(hours=24):
+                return False
+        except (ValueError, TypeError):
+            return False
+    control.update(last_attempt_at=instant.isoformat(), last_attempt_run=run_id)
+    queue.put(CONTROL_PATH, control, sha)
+    saved, _ = queue.get(CONTROL_PATH)
+    if saved != control:
+        raise RenewalError('control_unconfirmed')
+    return True
 
-            page.click("#log\\.login")
-            page.wait_for_timeout(3000)
 
-            # ── 캡차/보안인증 감지 ──
-            hint = looks_like_verification_wall(page)
-            if hint:
-                log(f"⚠️ 보안 인증 감지: '{hint}' - 자동 갱신 중단")
-                send_email(
-                    "쿠키 자동 갱신 실패 - 수동 확인 필요",
-                    f"<p>네이버가 보안 인증을 요구해 자동 로그인을 중단했습니다.</p>"
-                    f"<p>감지된 문구: <b>{hint}</b></p>"
-                    f"<p>반복 시도는 계정 보안 조치를 유발할 수 있어 재시도하지 않았습니다.</p>"
-                    f"<p><b>make_cookie.py로 로컬에서 수동 갱신해주세요.</b></p>"
-                )
-                browser.close()
-                return
+def live_queue():
+    from negative_queue import Queue
+    queue = Queue()
+    queue.preflight()
+    settings = json.loads(queue.source('negative_subscription_config.json')[0])
+    if settings.get('engine') != 'subscription' or settings.get('production_enabled') is not True:
+        raise RenewalError('engine_inactive')
+    return queue
 
-            # ── 신규 기기 등록 안내 팝업 처리 ("등록안함" 클릭) ──
+
+def secret_key():
+    import requests
+    token = os.environ.get('ADMIN_GITHUB_TOKEN', '')
+    if not token or os.environ.get('GITHUB_REPOSITORY') != REPO:
+        raise RenewalError('secret_credentials_missing')
+    headers = {'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json'}
+    try:
+        for attempt in range(3):
             try:
-                skip_btn = page.query_selector("a#new\\.dontsave, button:has-text('등록안함')")
-                if skip_btn:
-                    skip_btn.click()
-                    page.wait_for_timeout(1500)
-                    log("신규 기기 등록 팝업 - '등록안함' 처리")
+                response = requests.get(f'https://api.github.com/repos/{REPO}/actions/secrets/public-key',
+                                        headers=headers, timeout=20)
+            except requests.RequestException:
+                if attempt == 2:
+                    raise RenewalError('secret_preflight_unknown') from None
+                time.sleep(attempt+1)
+                continue
+            if response.status_code in {429, 500, 502, 503, 504} and attempt < 2:
+                time.sleep(attempt+1)
+                continue
+            break
+        if response.status_code != 200:
+            status = 'secret_permission_failed' if response.status_code in {401,403,404} else 'secret_preflight_failed'
+            raise RenewalError(status, response.status_code)
+        data = response.json()
+        if not data.get('key') or not data.get('key_id'):
+            raise RenewalError('secret_permission_failed')
+        return headers, data
+    except RenewalError:
+        raise
+    except Exception:
+        raise RenewalError('secret_preflight_unknown') from None
+
+
+def store_secret(state, key):
+    import requests
+    from nacl import encoding, public
+    headers, data = key
+    encrypted = public.SealedBox(public.PublicKey(data['key'].encode(), encoding.Base64Encoder())).encrypt(
+        json.dumps(state, ensure_ascii=False).encode())
+    try:
+        response = requests.put(f'https://api.github.com/repos/{REPO}/actions/secrets/NAVER_COOKIES_JSON',
+            headers=headers, timeout=20, json={'key_id': data['key_id'],
+            'encrypted_value': base64.b64encode(encrypted).decode()})
+    except Exception:
+        raise RenewalError('storage_uncertain') from None
+    if response.status_code not in {201, 204}:
+        raise RenewalError('storage_failed', response.status_code)
+
+
+def login_once(browser, checks=None):
+    context, phase = None, 'login_context_unknown'
+    try:
+        context = browser.new_context()
+        page = context.new_page()
+        phase = 'login_navigation_unknown'
+        page.goto('https://nid.naver.com/nidlogin.login', wait_until='domcontentloaded', timeout=20000)
+        if any(hint in page.inner_text('body') for hint in CHALLENGES):
+            raise RenewalError('human_required')
+        phase = 'login_form_unknown'
+        page.fill('#id', os.environ['NAVER_ID'])
+        page.fill('#pw', os.environ['NAVER_PW'])
+        phase = 'login_submit_unknown'
+        page.click('#loginBtn_column:visible, #loginBtn_row:visible, [id="log.login"]:visible', timeout=10000)
+        page.wait_for_timeout(2500)
+        phase = 'login_result_unknown'
+        if any(hint in page.inner_text('body') for hint in CHALLENGES):
+            raise RenewalError('human_required')
+        if 'nidlogin' in page.url:
+            raise RenewalError('login_failed')
+        phase = 'login_storage_unknown'
+        state = context.storage_state()
+        if storage_status(state) != 'present':
+            raise RenewalError('login_failed')
+        return state
+    except RenewalError:
+        raise
+    except Exception as error:
+        if checks is not None:
+            # The exception message can contain credentials and page text. Keep only a fixed category.
+            checks['login_error_type'] = 'timeout' if type(error).__name__ == 'TimeoutError' else 'unexpected'
+        raise RenewalError(phase) from None
+    finally:
+        if context is not None:
+            try:
+                context.close()
             except Exception:
                 pass
 
-            # ── 로그인 성공 여부 확인 ──
-            page.goto("https://www.naver.com", wait_until="domcontentloaded", timeout=15000)
-            page.wait_for_timeout(2000)
 
-            if "nid.naver.com" in page.url:
-                log("❌ 로그인 실패 - 여전히 로그인 페이지")
-                send_email(
-                    "쿠키 자동 갱신 실패 - 로그인 실패",
-                    "<p>아이디/비밀번호가 틀렸거나 알 수 없는 이유로 로그인에 실패했습니다.</p>"
-                    "<p>NAVER_ID / NAVER_PW Secret을 확인해주세요.</p>"
-                )
-                browser.close()
-                return
+def owner_notice(queue, status):
+    """Owner only, once per status per 24h; notification failure is independent."""
+    address, password = os.environ.get('GMAIL_USER'), os.environ.get('GMAIL_APP_PW')
+    if not address or not password:
+        return 'not_configured'
+    try:
+        control, sha = queue.get(CONTROL_PATH)
+        control = control or {'schema_version': 1}
+        notices = control.get('notice_history', {})
+        previous = notices.get(status)
+        if previous:
+            if now() - datetime.fromisoformat(previous) < timedelta(hours=24):
+                return 'suppressed'
+        notices[status] = now().isoformat()
+        control['notice_history'] = notices
+        queue.put(CONTROL_PATH, control, sha)
+        message = MIMEText('<p>네이버 쿠키 점검 상태: <b>' + html.escape(status) + '</b></p>'
+            '<p>보안 인증은 자동으로 통과하지 않습니다. 회원 전용 본문 검증과 다음 자연 회차를 확인해 주세요.</p>',
+            'html', 'utf-8')
+        message['Subject'] = '[쿠키갱신봇] ' + status
+        message['From'] = address
+        message['To'] = ERROR_EMAIL
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=20) as server:
+            server.login(address, password)
+            refused = server.sendmail(address, [ERROR_EMAIL], message.as_string())
+        return 'failed' if refused else 'accepted'
+    except Exception:
+        return 'failed'
 
-            log("✅ 로그인 성공 - 쿠키 추출")
-            storage = context.storage_state()
-            new_cookie_json = json.dumps(storage, ensure_ascii=False)
 
-            # 핵심 쿠키 존재 확인
-            cookie_names = {c["name"] for c in storage.get("cookies", [])}
-            has_core = {"NID_AUT", "NID_SES"}.issubset(cookie_names)
-            log(f"핵심 로그인 쿠키 확보: {has_core} ({cookie_names & {'NID_AUT','NID_SES','nid_inf'}})")
-
-            if not has_core:
-                log("❌ 핵심 쿠키(NID_AUT/NID_SES) 누락 - 갱신 중단")
-                send_email(
-                    "쿠키 자동 갱신 실패 - 핵심 쿠키 누락",
-                    "<p>로그인은 됐지만 NID_AUT/NID_SES 쿠키를 확보하지 못했습니다.</p>"
-                    "<p>수동 확인이 필요합니다.</p>"
-                )
-                browser.close()
-                return
-
-            browser.close()
-
-        # ── GitHub Secret 갱신 ──
-        status = update_github_secret("NAVER_COOKIES_JSON", new_cookie_json)
-        log(f"✅ NAVER_COOKIES_JSON Secret 갱신 완료 (status={status})")
-
-        send_email(
-            "쿠키 자동 갱신 성공",
-            f"<p>네이버 로그인 쿠키가 자동으로 갱신되어 <b>NAVER_COOKIES_JSON</b> Secret에 반영됐습니다.</p>"
-            f"<p>확보된 쿠키: {len(cookie_names)}개</p>"
-            f"<p>다음 모니터링 실행부터 새 쿠키로 동작합니다.</p>"
-        )
-
-    except Exception as e:
-        import traceback
-        err = traceback.format_exc()
-        log(f"❌ 예외 발생: {err}")
+def run(mode='auto'):
+    settings = json.loads(Path('negative_subscription_config.json').read_text())
+    if settings.get('engine') != 'subscription' or os.environ.get('DRY_RUN') == '1':
+        print('[쿠키갱신] 보류; 로그인0/쓰기0/메일0/API0')
+        return 0
+    if mode == 'check_access':
+        # Dedicated read-only diagnostic: no cookie access, browser, login, queue writes,
+        # Secret PUT or SMTP, even if credential permissions are already valid.
         try:
-            send_email(
-                "쿠키 자동 갱신 실패 - 예외 발생",
-                f"<pre>{err}</pre>"
-            )
+            secret_key()
+            report('secret_access_confirmed', login_attempted=False, secret_updated=False, notification='not_sent')
+            return 0
+        except Exception as error:
+            status = str(error) if isinstance(error, RenewalError) else 'secret_preflight_unknown'
+            details = {'http_status': error.http_status} if isinstance(error, RenewalError) and error.http_status else {}
+            report(status, login_attempted=False, secret_updated=False, notification='not_sent', **details)
+            return 2
+    if os.environ.get('COOKIE_AUTO_RENEW_ENABLED', 'true').lower() in {'0', 'false'}:
+        report('disabled', login_attempted=False, secret_updated=False)
+        return 0
+    urls = probe_urls(os.environ.get('NAVER_COOKIE_PROBES_JSON', ''))
+    if not urls:
+        try:
+            from negative_queue import Queue
+            queue = Queue()
+            queue.preflight()
+            probes, _ = queue.get('auth/cookie_probes.json')
+            urls = probe_urls(json.dumps((probes or {}).get('urls', [])))
         except Exception:
-            pass
-        raise
+            report('probe_config_unavailable', login_attempted=False, secret_updated=False)
+            return 0 if mode == 'auto' else 2
+    if not urls:
+        report('not_configured', login_attempted=False, secret_updated=False)
+        return 0 if mode == 'auto' else 2
+    from playwright.sync_api import sync_playwright
+    queue, attempted, secret_updated, access = None, False, False, 'unknown'
+    checks = {'cookie_file_present': COOKIE_FILE.is_file(),
+              'login_credentials_configured': bool(os.environ.get('NAVER_ID')) and bool(os.environ.get('NAVER_PW'))}
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                state = load_storage()
+                refreshed = {} if mode != 'check' else None
+                status = access_status(browser, state, urls, checks=checks, refreshed_state=refreshed)
+                access = status
+                if status == 'healthy':
+                    changed = (refreshed and
+                        {json.dumps(c, sort_keys=True) for c in refreshed['cookies'] if c.get('name') in CORE} !=
+                        {json.dumps(c, sort_keys=True) for c in state['cookies'] if c.get('name') in CORE})
+                    if not changed:
+                        report(status, login_attempted=False, secret_updated=False,
+                               renewal_action='session_reused', probe_checks=checks)
+                        return 0
+                    queue = live_queue()
+                    key = secret_key()
+                    # Independently verify the exact candidate before replacing the Secret. No password login.
+                    if access_status(browser, refreshed, urls) != 'healthy':
+                        raise RenewalError('new_cookie_unverified')
+                    live_queue()
+                    store_secret(refreshed, key)
+                    secret_updated = True
+                    try:
+                        write_storage(refreshed)
+                    except Exception:
+                        raise RenewalError('renewed_local_failed') from None
+                    report(status, login_attempted=False, secret_updated=True,
+                           renewal_action='session_updated', probe_checks=checks)
+                    return 0
+                if mode == 'check' or status != 'invalid':
+                    report(status, login_attempted=False, secret_updated=False, probe_checks=checks)
+                    return 0 if mode == 'auto' else 2
+                if not os.environ.get('NAVER_ID') or not os.environ.get('NAVER_PW'):
+                    raise RenewalError('login_credentials_missing')
+                queue = live_queue()
+                key = secret_key()
+                if not reserve_attempt(queue, now(), os.environ.get('GITHUB_RUN_ID', 'manual')):
+                    raise RenewalError('cooldown')
+                live_queue()
+                attempted = True
+                fresh = login_once(browser, checks=checks)
+                if access_status(browser, fresh, urls) != 'healthy':
+                    raise RenewalError('new_cookie_unverified')
+                live_queue()
+                store_secret(fresh, key)
+                secret_updated = True
+                try:
+                    write_storage(fresh)
+                except Exception:
+                    raise RenewalError('renewed_local_failed') from None
+            finally:
+                browser.close()
+        notice = owner_notice(queue, 'renewed')
+        report('renewed', login_attempted=attempted, secret_updated=True, notification=notice)
+        return 0
+    except Exception as error:
+        status = str(error) if isinstance(error, RenewalError) else 'unknown'
+        notice = owner_notice(queue, status) if queue and mode != 'check' else 'not_sent'
+        details = {'http_status': error.http_status} if isinstance(error, RenewalError) and error.http_status else {}
+        report(status, login_attempted=attempted, secret_updated=secret_updated, notification=notice,
+               access_status=access, probe_checks=checks, **details)
+        return 0 if mode == 'auto' else 2
 
-if __name__ == "__main__":
-    main()
 
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--mode', choices=['auto', 'check', 'check_access', 'renew'], default='auto')
+    raise SystemExit(run(parser.parse_args().mode))

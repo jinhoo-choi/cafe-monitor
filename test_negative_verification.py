@@ -35,11 +35,11 @@ def fixture(count=1):
             'member_post_ids':[post['post_id']],'representative_post_id':post['post_id'],'group_reason':'개별 주문 실패 주장 검수'})
     job={'schema_version':1,'bot_id':queue_module.BOT_ID,'mode':'verification','self_test':True,
          'job_id':'negative-offline','status':'pending','expires_at':(queue_module.now()+timedelta(hours=2)).isoformat(),
-         'input':{'policy_version':queue_module.POLICY,'seen_hash':'seen','items':inputs,'collection':{'coverage':[]}},
+         'input':{'policy_version':queue_module.POLICY,'policy_hash':bot.policy_hash(),'seen_hash':'seen','items':inputs,'collection':{'coverage':[]}},
          'receipts':{},'paid_ai_calls':0}
     job['input_hash']=queue_module.digest(job['input'])
     result={'schema_version':1,'bot_id':queue_module.BOT_ID,'policy_version':queue_module.POLICY,
-            'job_id':job['job_id'],'input_hash':job['input_hash'],'analysis_engine':'chatgpt_subscription',
+            'job_id':job['job_id'],'input_hash':job['input_hash'],'policy_hash':bot.policy_hash(),'analysis_engine':'chatgpt_subscription',
             'model_used':'unconfirmed','posts':rows,'groups':groups}
     return job,result
 
@@ -64,13 +64,23 @@ class VerificationRegression(unittest.TestCase):
         self.stack=ExitStack()
         self.addCleanup(self.stack.close)
         self.stack.enter_context(redirect_stdout(StringIO()))
-        self.stack.enter_context(patch.dict(os.environ,{'GMAIL_USER':'owner@example.invalid','GMAIL_APP_PW':'offline',
-            'NOTIFY_EMAIL':'owner@example.invalid','EMAIL_CC':'','TEST_MODE':'1'}))
+        self.stack.enter_context(patch.dict(os.environ,{'GMAIL_USER':'sender@example.invalid','GMAIL_APP_PW':'offline',
+            'NOTIFY_EMAIL':'myboy3743@gmail.com','EMAIL_CC':'','TEST_MODE':'1'}))
         self.server=MagicMock()
         self.server.__enter__.return_value=self.server
         self.server.sendmail.return_value={}
         self.smtp=self.stack.enter_context(patch.object(bot.smtplib,'SMTP_SSL',return_value=self.server))
         self.seen=self.stack.enter_context(patch.object(bot,'seen_snapshot',return_value=({},'seen')))
+
+    def test_policy_same_version_change_or_missing_hash_blocks_result(self):
+        for value in [None, '0'*64]:
+            result = copy.deepcopy(self.result)
+            result['policy_hash'] = value
+            with self.assertRaisesRegex(ValueError, '정책 원문 해시'):
+                bot.validate(self.job, result)
+        with patch.object(bot, 'policy_hash', return_value='1'*64), self.assertRaisesRegex(ValueError, '정책 원문 해시'):
+            bot.validate(self.job, self.result)
+        self.smtp.assert_not_called()
 
     def test_valid_native_result(self):
         inputs,rows=bot.validate(self.job,self.result)
@@ -88,7 +98,7 @@ class VerificationRegression(unittest.TestCase):
         self.assertEqual(state['paid_ai_calls'],0)
         self.assertEqual(list(state['receipts'].values()),['accepted'])
         self.server.sendmail.assert_called_once()
-        self.assertEqual(self.server.sendmail.call_args.args[1],['owner@example.invalid'])
+        self.assertEqual(self.server.sendmail.call_args.args[1],['myboy3743@gmail.com'])
         self.assertIn('previews/'+self.job['job_id']+'.json',self.queue.files)
 
     def test_completed_verification_is_never_resent(self):
@@ -105,6 +115,40 @@ class VerificationRegression(unittest.TestCase):
     def test_envelope_cannot_be_changed_to_other_recipient(self):
         with self.assertRaisesRegex(RuntimeError,'envelope'):
             bot.send_owner('subject','html','group@example.invalid')
+        self.smtp.assert_not_called()
+
+    def test_company_or_sender_address_cannot_receive_verification(self):
+        for address in ('111715@koreainvestment.com','sender@example.invalid'):
+            with self.subTest(address=address),self.assertRaisesRegex(RuntimeError,'envelope'):
+                bot.send_owner('subject','html',address)
+            with patch.dict(os.environ,{'NOTIFY_EMAIL':address}),self.assertRaisesRegex(RuntimeError,'격리'):
+                bot.consume(self.queue,self.job['job_id'])
+        self.smtp.assert_not_called()
+
+    def test_pending_verification_retries_existing_preview_after_login_failure(self):
+        self.server.login.side_effect=smtplib.SMTPAuthenticationError(535,b'offline')
+        with self.assertRaises(smtplib.SMTPAuthenticationError):
+            bot.consume(self.queue,self.job['job_id'])
+        self.assertEqual(self.queue.get(self.queue.path)[0]['status'],'pending')
+        self.server.sendmail.assert_not_called()
+        self.server.login.side_effect=None
+        bot.consume(self.queue,self.job['job_id'])
+        self.assertEqual(self.queue.get(self.queue.path)[0]['status'],'verified')
+        self.server.sendmail.assert_called_once()
+        bot.consume(self.queue,self.job['job_id'])
+        self.server.sendmail.assert_called_once()
+
+    def test_legacy_test_workflow_sends_only_approved_gmail(self):
+        import runpy
+        with patch.dict(os.environ,{'EMAIL_CC':'exec@example.invalid'}):
+            runpy.run_path('test_bcc_send.py',run_name='owner_mail_audit')
+        self.server.sendmail.assert_called_once()
+        self.assertEqual(self.server.sendmail.call_args.args[1],['myboy3743@gmail.com'])
+
+    def test_legacy_test_workflow_requires_explicit_test_mode(self):
+        import runpy
+        with patch.dict(os.environ,{'TEST_MODE':'0'}),self.assertRaisesRegex(RuntimeError,'테스트 모드'):
+            runpy.run_path('test_bcc_send.py',run_name='owner_mail_audit')
         self.smtp.assert_not_called()
 
     def test_production_or_other_bot_job_never_sends(self):
@@ -141,7 +185,7 @@ class VerificationRegression(unittest.TestCase):
         self.server.sendmail.assert_called_once()
 
     def test_smtp_refusal_never_marks_verified(self):
-        self.server.sendmail.return_value={'owner@example.invalid':(550,b'no')}
+        self.server.sendmail.return_value={'myboy3743@gmail.com':(550,b'no')}
         with self.assertRaisesRegex(RuntimeError,'SMTP 거부'): bot.consume(self.queue,self.job['job_id'])
         self.assertEqual(self.queue.get(self.queue.path)[0]['status'],'uncertain')
 
@@ -330,7 +374,7 @@ class QueueAndRequestRegression(unittest.TestCase):
                     with self.subTest(raw=raw),self.assertRaises((ValueError,json.JSONDecodeError)):bot.seen_snapshot()
 
     def test_legacy_paid_paths_and_db_writes_are_disabled(self):
-        with patch.dict(os.environ,{'GMAIL_USER':'owner@example.invalid','GMAIL_APP_PW':'offline','NOTIFY_EMAIL':'owner@example.invalid'}):
+        with patch.dict(os.environ,{'GMAIL_USER':'111715@koreainvestment.com','GMAIL_APP_PW':'offline','NOTIFY_EMAIL':'111715@koreainvestment.com'}):
             module=bot.collector()
         for name in ('main','analyze_sentiment','group_similar_alerts','regenerate_widespread_reply','mark_seen','send_alert_batch'):
             with self.subTest(name=name),self.assertRaisesRegex(RuntimeError,'금지'):getattr(module,name)()
@@ -339,3 +383,5 @@ class QueueAndRequestRegression(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+

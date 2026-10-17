@@ -331,7 +331,7 @@ def _status_email(crawled_count, keyword_count, notices, instant, test):
 </table></td></tr></table></body></html>'''
 
 
-def render(job, result, inputs, posts, selected, deferred, production=False):
+def render(job, result, inputs, posts, selected, deferred, production=False, executive=False):
     collection = job['input'].get('collection', {})
     coverage = collection.get('coverage', [])
     crawled_count = sum(row.get('listed', 0) for row in coverage) if coverage else len(inputs)
@@ -344,6 +344,8 @@ def render(job, result, inputs, posts, selected, deferred, production=False):
         notices.append('네이버 로그인 쿠키 확인 필요 — NAVER_COOKIES_JSON 재등록 필요')
     elif collection.get('cookie_expiring'):
         notices.append('네이버 쿠키 7일 내 만료 예정(' + ', '.join(collection['cookie_expiring']) + ') — 재등록 준비')
+    if collection.get('cookie_auth_status') and collection.get('cookie_auth_verified') is not True:
+        notices.append('회원 전용 본문 인증 미확인 — 쿠키 이름 존재나 공개 홈 접근을 정상 인증으로 간주하지 않습니다.')
     if deferred:
         notices.append(f'이월 이슈 {len(deferred)}건 — 다음 회차 확인 대상입니다.')
     alerts = []
@@ -357,6 +359,10 @@ def render(job, result, inputs, posts, selected, deferred, production=False):
         alerts.append(value)
     reviews = [_metadata(inputs[identifier], coverage) for identifier, post in posts.items() if post['verdict'] == 'needs_review']
     instant = datetime.now(KST)
+    if executive:
+        if not alerts:
+            raise ValueError('임원용 메일에는 확인된 부정 이슈가 필요합니다.')
+        return render_email(alerts, crawled_count, keyword_count, now_kst=instant)
     if not alerts and not reviews:
         return _status_email(crawled_count, keyword_count, ' '.join(notices), instant, not production)
     missing = sum(source.get('body_status') != 'collected' for identifier, source in inputs.items() if posts[identifier]['verdict'] == 'needs_review')
@@ -367,3 +373,4 @@ def render(job, result, inputs, posts, selected, deferred, production=False):
                         now_kst=instant, notice_html=_notice(' '.join(notices)),
                         test_badge='[TEST] 본인 전용 · ' if not production else '',
                         review_label=review_label, review_note=review_note)
+
