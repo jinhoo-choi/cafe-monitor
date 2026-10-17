@@ -27,7 +27,7 @@ def run():
     seen = json.loads(raw_seen)
     seen_hash = digest(seen)
     index, _ = queue.get('index.json')
-    prior, prior_processed = {}, set()
+    prior, prior_processed, unresolved = {}, set(), {}
     for job_id in (index or {}).get('jobs', []):
         job, _ = queue.get('jobs/' + job_id + '.json')
         if not job or job.get('mode') != 'production':
@@ -35,6 +35,8 @@ def run():
         if job.get('status') == 'completed':
             prior_processed.update(job.get('processed_ids', []))
         for entry in job.get('input', {}).get('items', []):
+            if entry.get('source') == 'cafe' and entry.get('body_status') != 'collected':
+                unresolved[entry['post_id']] = entry
             prior.setdefault(entry['post_id'], []).append({
                 'job_id': job_id, 'status': job.get('status'),
                 'body_status': entry.get('body_status'),
@@ -110,6 +112,10 @@ def run():
                         break
                 if human_required:
                     break
+            for identifier, old in unresolved.items():
+                if identifier.startswith(cafe['id'] + ':'):
+                    found.setdefault(identifier.split(':', 1)[1], {'post_id': identifier.split(':', 1)[1],
+                        'title': old['title'], 'url': old['url'], 'date_str': old.get('date_raw', '')})
             coverage['listed_unique'] = len(found)
             if cafe['id'] == 'stocktraining':
                 coverage['membership'] = 'manager_approval_pending'
