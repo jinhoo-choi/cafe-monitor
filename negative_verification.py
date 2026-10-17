@@ -1,5 +1,5 @@
 """실제 수집→구독 분석 결과 검증→본인 SMTP 검수. 운영 main·DB·API는 실행하지 않는다."""
-from notification_owner import OWNER_EMAIL
+from notification_owner import ERROR_EMAIL
 
 import copy
 from contextlib import redirect_stdout
@@ -474,9 +474,9 @@ def render(job, result, production=False):
 def owner():
     address = os.environ.get('GMAIL_USER','').strip()
     if (os.environ.get('TEST_MODE')!='1' or not address or not os.environ.get('GMAIL_APP_PW')
-            or os.environ.get('NOTIFY_EMAIL','').strip()!=address or os.environ.get('EMAIL_CC','').strip()):
+            or os.environ.get('NOTIFY_EMAIL','').strip()!=ERROR_EMAIL or os.environ.get('EMAIL_CC','').strip()):
         raise RuntimeError('본인 검수 수신자 격리 설정 실패')
-    return OWNER_EMAIL
+    return ERROR_EMAIL
 
 
 def send_owner(subject, body, address):
@@ -519,8 +519,10 @@ def consume(queue, job_id):
         raise RuntimeError('검수 입력 이후 운영 이력 변경 — 본인 발송 보류')
     body = render(job,result)
     selected, deferred = selected_groups(result)
-    queue.put('previews/'+job_id+'.json',{'html':body,'paid_ai_calls':0})
-    queue.put('deferred/'+job_id+'.json',{'groups':deferred,'mode':'verification','production_seen_writes':0})
+    for output_path, value in (
+            ('previews/'+job_id+'.json',{'html':body,'paid_ai_calls':0}),
+            ('deferred/'+job_id+'.json',{'groups':deferred,'mode':'verification','production_seen_writes':0})):
+        queue.put(output_path,value,queue.get(output_path)[1])
     with smtplib.SMTP_SSL('smtp.gmail.com',465,timeout=20) as server:
         server.login(os.environ['GMAIL_USER'].strip(),os.environ['GMAIL_APP_PW'])
     latest, latest_sha = queue.get(path)
@@ -552,6 +554,7 @@ def consume(queue, job_id):
         raise
     print(json.dumps({'job_id':job_id,'status':'verified','self_test':True,'smtp_accepted':1,
                       'production_recipients':0,'production_seen_writes':0,'paid_ai_calls':0}))
+
 
 
 

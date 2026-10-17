@@ -1,6 +1,6 @@
-"""실운영 알림 메일과 동일한 조건(개별발송 + 대용량 HTML + 외부 링크)으로
-111715 계정 수신 여부를 검증하는 일회성 테스트."""
+"""실운영과 비슷한 HTML을 승인된 본인 Gmail 한 주소에만 보내는 일회성 테스트."""
 import os, smtplib
+from notification_owner import ERROR_EMAIL
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.utils import formataddr, formatdate, make_msgid
@@ -9,7 +9,9 @@ from datetime import datetime, timezone, timedelta
 
 GMAIL_USER = os.environ["GMAIL_USER"]
 GMAIL_APP_PW = os.environ["GMAIL_APP_PW"]
-TEST_TARGET = "111715@koreainvestment.com"
+if os.environ.get('TEST_MODE') != '1':
+    raise RuntimeError('본인 전용 테스트 모드 필요')
+TEST_TARGET = ERROR_EMAIL
 KST = timezone(timedelta(hours=9))
 
 BOT_NAME = "⚠️ eBiz 부정여론봇"
@@ -44,7 +46,7 @@ html_body = f"""<!DOCTYPE html>
   <tr><td style="background:#fafafa;padding:16px;border-radius:0 0 8px 8px;">
     {cards}
     <div style="font-size:12px;color:#999;margin-top:12px;">
-      이 메일을 받으셨다면 개별발송 방식(To=수신자 본인)이 실운영 콘텐츠 조건에서도
+      이 메일을 받으셨다면 본인 Gmail 개별발송(To=수신자 본인)이 테스트 콘텐츠 조건에서도
       정상 수신됨이 확인된 것입니다. 발송 시각: {now} KST
     </div>
   </td></tr>
@@ -53,7 +55,7 @@ html_body = f"""<!DOCTYPE html>
 </body></html>"""
 
 # 실운영과 동일: 수신자별 개별 발송 (To = 각자 자기 주소)
-targets = [GMAIL_USER, TEST_TARGET]
+targets = [TEST_TARGET]
 refused_all = {}
 with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
     s.login(GMAIL_USER, GMAIL_APP_PW)
@@ -71,3 +73,4 @@ with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
             refused_all.update(refused)
 
 print("완료 - 거부:", refused_all if refused_all else "없음")
+
