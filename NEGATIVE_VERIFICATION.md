@@ -20,7 +20,7 @@
 
 입력·분석·HTML·영수증은 jinhoo-choi/insight-bot-data main의 subscription/negative에만 저장한다. 쿠키는 브라우저에만 사용하고 큐에 저장하지 않는다. 입력 전 연락처·이메일·계좌·외부 주소를 마스킹한다. 공개 요청과 로그에는 제한된 메타데이터만 남긴다.
 
-TEST_MODE=1, NOTIFY_EMAIL=GMAIL_USER, EMAIL_CC 비어 있음이 모두 확인돼야 발송한다. SMTP envelope에도 GMAIL_USER 한 주소만 넣는다. sending 선기록 후 한 번만 발송하고, SMTP accepted와 이력 불변을 확인한 경우만 verified·self_test=true로 기록한다. sending/uncertain/verified는 다시 발송하지 않는다.
+TEST_MODE=1, NOTIFY_EMAIL=myboy3743@gmail.com, EMAIL_CC 비어 있음이 모두 확인돼야 발송한다. SMTP 로그인 계정과 무관하게 검수 envelope는 승인된 Gmail 한 주소만 허용한다. sending 선기록 후 한 번만 발송하고, SMTP accepted와 이력 불변을 확인한 경우만 verified·self_test=true로 기록한다. sending/uncertain/verified는 다시 발송하지 않는다.
 
 검수 워크플로는 운영 이력을 읽기 전용 파일로 받고 DB를 커밋하지 않는다. NEGATIVE_QUEUE_TOKEN은 사용자 승인으로 기존 정상 큐 키를 암호화 복사한 Secret이며 기존 ADMIN_GITHUB_TOKEN을 변경하지 않는다.
 
@@ -68,3 +68,4 @@ SMTP envelope와 기존 접수·중복 방지 상태 관리는 유지한다. 확
 ## 2026-10-15 정책 내용 해시 검증
 
 input.policy_hash와 결과 policy_hash를 현재 negative_policy.json의 canonical JSON SHA-256과 대조한다. 수집 전후, 소비 및 각 수신자 제출 전에 main 정책을 재확인한다. 같은 policy_version 안의 내용 변경도 발송을 보류한다. 해시가 없는 legacy pending은 자동 소비하지 않는다. 이미 종결된 회차·영수증·처리 이력은 변경하거나 재전송하지 않는다.
+
