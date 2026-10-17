@@ -40,11 +40,11 @@ class ProductionRegression(unittest.TestCase):
         with patch.dict(os.environ,{'GMAIL_USER':'sender@example.invalid'}):
             self.assertEqual(bot.recipients(0),('sender@example.invalid',[bot.OWNER_EMAIL]))
 
-    def test_error_cookie_notices_use_gmail_and_verification_stays_unchanged(self):
+    def test_error_cookie_notices_and_verification_use_only_gmail(self):
         import refresh_cookies
         from email import message_from_string
         with patch.dict(os.environ,{'GMAIL_USER':'sender@example.invalid',
-                                   'NOTIFY_EMAIL':'sender@example.invalid','EMAIL_CC':'','TEST_MODE':'1'}):
+                                   'NOTIFY_EMAIL':bot.ERROR_EMAIL,'EMAIL_CC':'','TEST_MODE':'1'}):
             self.server.__enter__.return_value=self.server
             bot.notify_error()
             queue=MagicMock()
@@ -53,7 +53,7 @@ class ProductionRegression(unittest.TestCase):
             common.send_owner('owner diagnostic','diagnostic body',common.owner())
         self.assertEqual(self.server.sendmail.call_count,3)
         for call, recipient in zip(self.server.sendmail.call_args_list,
-                                   [bot.ERROR_EMAIL, bot.ERROR_EMAIL, bot.OWNER_EMAIL]):
+                                   [bot.ERROR_EMAIL, bot.ERROR_EMAIL, bot.ERROR_EMAIL]):
             self.assertEqual(call.args[:2],('sender@example.invalid',[recipient]))
             mail=message_from_string(call.args[2])
             self.assertEqual(mail['To'],recipient)
@@ -458,6 +458,7 @@ class ProductionRegression(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
 
 
 
