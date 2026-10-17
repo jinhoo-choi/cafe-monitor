@@ -140,7 +140,7 @@ CAFES = [
     {"id": "dlxogns01",        "num_id": "23676262", "name": "배당 투자자 모임", "login_required": False},
     {"id": "engmstudy",        "num_id": "14028420", "name": "짠돌이카페", "login_required": False},
     {"id": "hayate1",          "num_id": "11560463", "name": "주식광장", "login_required": False},
-    {"id": "divclub",          "num_id": "31050378", "name": "은퇴후 50년", "login_required": True},
+    {"id": "divclub",          "num_id": "31050378", "name": "배당 투자자 모임", "login_required": True},
     {"id": "moneyinsights",    "num_id": "31449216", "name": "돈이 되는 모든 정보", "login_required": False},
 ]
 
