@@ -485,7 +485,12 @@ def search_keyword(page, cafe_id, num_id, keyword):
             else:
                 post_time = parse_date(date_str)
 
-            if post_time < cutoff:
+            # A date-only row can still be inside the trailing 24 hours.
+            # Keep it as a candidate; the article timestamp is checked after loading.
+            latest_possible = post_time
+            if re.fullmatch(r'\d{4}\.\d{2}\.\d{2}', date_str) or date_str == '어제':
+                latest_possible += timedelta(days=1)
+            if latest_possible < cutoff:
                 continue
 
             posts.append({
@@ -637,7 +642,7 @@ def get_blog_detail(page, post_url):
 
 # ─────────────────────────────────────────
 
-def get_post_detail(page, post_url, cafe_id):
+def get_post_detail(page, post_url, cafe_id, details=None):
     """본문 텍스트 반환 - f-e URL로 접근 후 iframe에서 본문 파싱
     반환: (body_2000, body_full) 튜플
     - body_2000: AI 분석용 (2000자 제한)
@@ -649,6 +654,8 @@ def get_post_detail(page, post_url, cafe_id):
     SELECTOR_COMBINED = ", ".join(BODY_SELECTORS)
     requested = urllib.parse.urlparse(post_url)
     target = re.search(r'/cafes/(\d+)/articles/(\d+)', requested.path)
+    if details is not None:
+        details.clear()
 
     def _article_document(document):
         parsed = urllib.parse.urlparse(document.url or '')
@@ -672,6 +679,16 @@ def get_post_detail(page, post_url, cafe_id):
 
         body = ""
         frames = [frame for frame in page.frames if _article_document(frame)]
+        if details is not None:
+            for document in frames + ([page] if _article_document(page) else []):
+                try:
+                    date = document.query_selector('.article_info .date')
+                    text = date.inner_text().strip() if date else ''
+                    if re.fullmatch(r'20\d{2}\.\d{1,2}\.\d{1,2}\.\s+\d{1,2}:\d{2}', text):
+                        details['date_str'] = text
+                        break
+                except Exception:
+                    pass
 
         # 1순위: ca-fe URL 패턴 iframe 우선 탐색 (실제 본문 렌더링 프레임)
         try:
