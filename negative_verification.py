@@ -232,8 +232,18 @@ def collect(queue, fixture_id=None, production=False):
                     if identifier in seen:
                         continue
                     record['unseen'] += 1
-                    _, full_body = module.get_post_detail(page, post['url'], cafe['id'])
-                    inputs.append(item(identifier, post['title'], full_body, post['url'], 'cafe', 'live', post.get('date_str', '')))
+                    details = {}
+                    _, full_body = module.get_post_detail(page, post['url'], cafe['id'], details=details)
+                    date_raw = details.get('date_str', post.get('date_str', ''))
+                    dated = published(date_raw)
+                    cutoff = now()-timedelta(hours=24)
+                    if details.get('date_str') and dated and datetime.fromisoformat(dated) < cutoff:
+                        continue
+                    entry = item(identifier, post['title'], full_body, post['url'], 'cafe', 'live', date_raw)
+                    if (not details.get('date_str') and (date_raw == '어제'
+                            or (dated and datetime.fromisoformat(dated) < cutoff))):
+                        entry['collection_window_uncertain'] = True
+                    inputs.append(entry)
                     record['selected'] += 1
             except Exception as error:
                 record['status'] = 'collection_error'
@@ -370,6 +380,8 @@ def validate(job, result, allow_production=False):
             raise ValueError('검수 원문 URL 오류')
         if not body_available(source) and post['verdict'] != 'needs_review':
             raise ValueError('본문 미확보는 확인필요로 보류')
+        if source.get('collection_window_uncertain') and post['verdict'] != 'needs_review':
+            raise ValueError('게시 시각·24시간 범위 미확인은 확인필요로 보류')
         visible_target = any(a.casefold() in (source['title']+' '+source['body_excerpt']).casefold() for a in ALIASES)
         if source.get('target_present') and not visible_target and post['verdict'] != 'needs_review':
             raise ValueError('대상 언급 문단 누락은 확인필요로 보류')
