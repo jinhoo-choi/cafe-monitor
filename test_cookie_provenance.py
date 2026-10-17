@@ -1,9 +1,53 @@
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 import cookie_auth
 
 
 class ProbeProvenance(unittest.TestCase):
+    def test_collector_does_not_treat_wrapper_comments_as_article_body(self):
+        import negative_verification
+        module=negative_verification.collector()
+        page=MagicMock()
+        page.url='https://cafe.naver.com/f-e/cafes/100/articles/101'
+        frame=MagicMock()
+        frame.url='https://cafe.naver.com/ca-fe/cafes/100/articles/101'
+        shell=MagicMock()
+        shell.inner_text.return_value='제목 댓글 등록순 클린봇 한국투자증권 불편합니다'
+        frame.query_selector.side_effect=lambda selector: shell if selector=='.ArticleContentBox' else None
+        page.frames=[frame]
+        page.query_selector.return_value=None
+        with patch.object(module,'log'):
+            self.assertEqual(module.get_post_detail(page,page.url,'offline'),('',''))
+
+    def test_collector_uses_only_requested_article_body_and_ignores_shell(self):
+        import negative_verification
+        module=negative_verification.collector()
+        page=MagicMock()
+        page.url='https://cafe.naver.com/f-e/cafes/100/articles/101'
+        frame=MagicMock()
+        frame.url='https://cafe.naver.com/ca-fe/cafes/100/articles/101'
+        body=MagicMock()
+        body.inner_text.return_value='실제 한국투자증권 게시글 본문입니다.'
+        frame.query_selector.side_effect=lambda selector: body if selector=='.se-main-container' else None
+        page.frames=[frame]
+        with patch.object(module,'log'):
+            self.assertEqual(module.get_post_detail(page,page.url,'offline'),(body.inner_text.return_value,)*2)
+
+    def test_collector_rejects_another_article_frame_and_untrusted_host(self):
+        import negative_verification
+        module=negative_verification.collector()
+        for url in ('https://cafe.naver.com/ca-fe/cafes/100/articles/999',
+                    'https://cafe.naver.com.evil.invalid/ca-fe/cafes/100/articles/101'):
+            page=MagicMock()
+            page.url='https://cafe.naver.com/f-e/cafes/100/articles/101'
+            frame=MagicMock()
+            frame.url=url
+            frame.query_selector.return_value.inner_text.return_value='다른 게시글의 한국투자증권 본문'*10
+            page.frames=[frame]
+            page.query_selector.return_value=None
+            with self.subTest(url=url),patch.object(module,'log'):
+                self.assertEqual(module.get_post_detail(page,page.url,'offline'),('',''))
+
     def test_verified_article_api_body_is_readable_when_dom_is_only_menu(self):
         page = MagicMock()
         page.url = 'https://cafe.naver.com/f-e/cafes/100/articles/101'
@@ -97,3 +141,4 @@ class ProbeProvenance(unittest.TestCase):
         frame.query_selector_all.return_value[0].inner_text.return_value = '요청한 게시글의 실제 본문입니다' * 10
         page.frames = [frame]
         self.assertEqual(cookie_auth.page_status(page,page.url),'body')
+
