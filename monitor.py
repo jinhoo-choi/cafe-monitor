@@ -418,14 +418,14 @@ def parse_date(date_str):
         pass
     return now
 
-def search_keyword(page, cafe_id, num_id, keyword):
+def search_keyword(page, cafe_id, num_id, keyword, page_number=1):
     """카페 인카페 검색으로 키워드 포함 게시글 수집 (24시간 이내)"""
     encoded = urllib.parse.quote(keyword)
     # 가계부/절약 카페는 제목 전용 검색으로 오탐 방지
     if cafe_id in ["onepieceholicplus"]:
-        url = f"https://cafe.naver.com/f-e/cafes/{num_id}/menus/0?viewType=L&ta=TITLE&page=1&q={encoded}"
+        url = f"https://cafe.naver.com/f-e/cafes/{num_id}/menus/0?viewType=L&ta=TITLE&page={page_number}&q={encoded}"
     else:
-        url = f"https://cafe.naver.com/f-e/cafes/{num_id}/menus/0?viewType=L&ta=ARTICLE_COMMENT&page=1&q={encoded}"
+        url = f"https://cafe.naver.com/f-e/cafes/{num_id}/menus/0?viewType=L&ta=ARTICLE_COMMENT&page={page_number}&q={encoded}"
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=20000)
     except Exception as e:
