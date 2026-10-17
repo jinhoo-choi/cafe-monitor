@@ -3,84 +3,72 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'check는 로그인·Secret·메일 쓰기 없이 인증만 점검'
+        description: '본인 검수: 실제 수집만, 로그인·메일·이력 쓰기 0'
         type: choice
-        options: [check, check_access, auto]
+        options: [check]
         default: check
-  push:
-    branches: [main]
-    paths: [cookie_refresh_request.json]
 permissions:
   contents: read
 concurrency:
   group: naver-cafe-monitor
   cancel-in-progress: false
 jobs:
-  refresh:
-    if: github.ref == 'refs/heads/main'
+  audit:
+    if: github.ref == 'refs/heads/audit/negative-full-20261017'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: 메타데이터 요청 검증
-        id: request
-        env:
-          INPUT_MODE: ${{ inputs.mode }}
+      - name: 검수 의존성 설치
         run: |
-          python - <<'PY'
-          import json,os,re
-          mode=os.environ.get('INPUT_MODE')
-          if os.environ['GITHUB_EVENT_NAME']=='push':
-              value=json.load(open('cookie_refresh_request.json'))
-              assert set(value)=={'operation','mode','request_id'}
-              assert value['operation']=='cookie_preflight'
-              assert re.fullmatch(r'[A-Za-z0-9_-]{1,80}',value['request_id'])
-              mode=value['mode']
-          assert mode in {'check','check_access','auto'}
-          with open(os.environ['GITHUB_OUTPUT'],'a') as output: output.write('mode='+mode+'\n')
-          PY
-      - name: HTTP 패키지 설치
-        run: pip install requests
-      - name: 인증 패키지·브라우저 설치
-        if: steps.request.outputs.mode != 'check_access'
-        run: |
-          pip install playwright requests pynacl
+          pip install requests playwright jsonschema pyyaml pynacl
           playwright install --with-deps chromium
-      - name: 기존 쿠키 복원
-        if: steps.request.outputs.mode != 'check_access'
+      - name: 전체 오프라인 회귀 검증
+        run: |
+          python -m unittest -q test_negative_verification test_negative_subscription test_cookie_refresh test_cookie_provenance
+          python - <<'PY'
+          import glob,json,jsonschema,yaml
+          jsonschema.Draft202012Validator.check_schema(json.load(open('negative_result_schema.json')))
+          for path in glob.glob('.github/workflows/*.yml'):
+              yaml.safe_load(open(path))
+          print('schema and workflow validation passed')
+          PY
+      - name: 기존 쿠키 복원 및 main 이력 읽기 전용 스냅샷
         env:
           NAVER_COOKIE_STATE: ${{ secrets.NAVER_COOKIES_JSON }}
         run: |
+          git show origin/main:seen_posts.json > /tmp/negative_production_seen.json
           python - <<'PY'
           import os
           from pathlib import Path
           state=os.environ.get('NAVER_COOKIE_STATE','')
           if state:
-              # Malformed state is handled by the sanitized preflight, never a raw traceback.
               Path('naver_cookies.json').write_text(state)
               Path('naver_cookies.json').chmod(0o600)
           PY
-      - name: Secrets 공개키 읽기 권한만 진단 — 로그인0·쓰기0·메일0
-        if: steps.request.outputs.mode == 'check_access'
+      - name: 저장된 세션 실제 회원 본문 2건 검증 — 로그인0·Secret쓰기0·메일0
         env:
-          ADMIN_GITHUB_TOKEN: ${{ secrets.NEGATIVE_QUEUE_TOKEN }}
-        run: python refresh_cookies.py --mode check_access
-      - name: 실제 회원 본문 인증·필요시 1회 갱신 — API0·운영 발송0
-        if: steps.request.outputs.mode != 'check_access'
-        env:
-          MODE: ${{ steps.request.outputs.mode }}
           NEGATIVE_QUEUE_TOKEN: ${{ secrets.NEGATIVE_QUEUE_TOKEN }}
           NAVER_COOKIE_PROBES_JSON: ${{ secrets.NAVER_COOKIE_PROBES_JSON }}
-          COOKIE_AUTO_RENEW_ENABLED: ${{ vars.COOKIE_AUTO_RENEW_ENABLED }}
-          NAVER_ID: ${{ secrets.NAVER_ID }}
-          NAVER_PW: ${{ secrets.NAVER_PW }}
-          ADMIN_GITHUB_TOKEN: ${{ secrets.NEGATIVE_QUEUE_TOKEN }}
-          GMAIL_USER: ${{ secrets.GMAIL_USER }}
-          GMAIL_APP_PW: ${{ secrets.GMAIL_APP_PW }}
-        run: python refresh_cookies.py --mode "$MODE"
-      - name: 쿠키·임시 인증자료 제거
+        run: python refresh_cookies.py --mode check
+      - name: 14개 카페·블로그 실제 읽기 전용 수집 — API0·SMTP0·운영이력0
+        env:
+          NEGATIVE_QUEUE_TOKEN: ${{ secrets.NEGATIVE_QUEUE_TOKEN }}
+          NEGATIVE_SEEN_PATH: /tmp/negative_production_seen.json
+          CLAUDE_API_KEY: ''
+        run: |
+          python - <<'PY'
+          from negative_queue import Queue
+          from negative_verification import collect
+          collect(Queue())
+          PY
+      - name: 운영 이력 변경 없음 확인
+        run: git diff --exit-code -- seen_posts.json monitor.py .github/workflows/monitor.yml
+      - name: 임시 인증자료 제거
         if: always()
         run: rm -f naver_cookies.json naver_cookie_status.json .naver_cookie_*
