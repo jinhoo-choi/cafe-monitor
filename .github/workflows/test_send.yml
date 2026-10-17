@@ -1,4 +1,4 @@
-name: Bcc 수신 테스트 (일회성)
+name: Gmail 본인 수신 테스트 (일회성)
 
 on:
   workflow_dispatch:
@@ -13,6 +13,8 @@ jobs:
           python-version: "3.11"
       - name: Send Bcc test email
         env:
+          TEST_MODE: '1'
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PW: ${{ secrets.GMAIL_APP_PW }}
         run: python test_bcc_send.py
+
