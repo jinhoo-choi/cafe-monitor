@@ -82,6 +82,17 @@ class VerificationRegression(unittest.TestCase):
             bot.validate(self.job, self.result)
         self.smtp.assert_not_called()
 
+    def test_review_only_heading_never_claims_absence_of_negative_sentiment(self):
+        self.job['production_preview']=True
+        self.job['input']['items'][0].update(body_status='missing',body_excerpt='')
+        self.result['posts'][0].update(verdict='needs_review',score=None,urgency='watch',category='unresolved',evidence_quotes=[])
+        self.result['groups']=[]
+        self.job['input_hash']=queue_module.digest(self.job['input'])
+        self.result['input_hash']=self.job['input_hash']
+        rendered=bot.render(self.job,self.result)
+        self.assertIn('부정 여부 확인 필요',rendered)
+        self.assertNotIn('부정여론 없음',rendered)
+
     def test_valid_native_result(self):
         inputs,rows=bot.validate(self.job,self.result)
         self.assertEqual(len(inputs),1)
