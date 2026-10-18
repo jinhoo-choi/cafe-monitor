@@ -4,8 +4,6 @@ deny() { echo '::error::Laptop runner rejected an unauthorized job'; exit 1; }
 [[ ${GITHUB_REPOSITORY:-} == jinhoo-choi/cafe-monitor ]] || deny
 [[ ${GITHUB_REF:-} == refs/heads/main ]] || deny
 case ${GITHUB_WORKFLOW_REF:-} in
-  jinhoo-choi/cafe-monitor/.github/workflows/monitor.yml@refs/heads/main)
-    [[ ${GITHUB_EVENT_NAME:-} == workflow_dispatch ]] || deny ;;
   jinhoo-choi/cafe-monitor/.github/workflows/refresh_cookies.yml@refs/heads/main)
     [[ ${GITHUB_EVENT_NAME:-} == workflow_dispatch || ${GITHUB_EVENT_NAME:-} == push ]] || deny ;;
   *) deny ;;

@@ -298,9 +298,17 @@ def notify_error():
     run = os.environ.get('GITHUB_RUN_ID','')
     url = 'https://github.com/jinhoo-choi/cafe-monitor/actions/runs/'+run
     body = '<p>부정여론봇 구독 경로를 보류했습니다. 유료 API로 전환하지 않았습니다.</p><p>수집·발송·이력 상태는 <a href="'+url+'">Actions 실행 기록</a>에서 확인해 주세요. 접수된 메일을 임의로 재발송하지 마세요.</p>'
+    subject = '[부정여론봇] 구독 경로 오류'
+    try:
+        cookie_status = json.loads(Path('naver_cookie_status.json').read_text()).get('status')
+    except (OSError, ValueError, AttributeError):
+        cookie_status = None
+    if cookie_status and cookie_status != 'healthy':
+        subject = '[부정여론봇] 회원 카페 인증 확인 필요'
+        body += '<p>클라우드에서 회원 전용 본문 인증을 확인하지 못해 수집을 보류했습니다. 부정 없음으로 판정한 결과가 아닙니다. 노트북을 켜서 쿠키 점검·갱신이 필요합니다. 국내 쿠키가 정상이어도 클라우드 접속 환경의 인증 제한은 별도로 확인해야 합니다.</p>'
     with smtplib.SMTP_SSL('smtp.gmail.com',465,timeout=20) as server:
         server.login(sender,os.environ['GMAIL_APP_PW'])
-        refused = server.sendmail(sender,[ERROR_EMAIL],message('[부정여론봇] 구독 경로 오류',body,sender,ERROR_EMAIL))
+        refused = server.sendmail(sender,[ERROR_EMAIL],message(subject,body,sender,ERROR_EMAIL))
     if refused:
         raise RuntimeError('본인 오류 알림 거부')
     print('본인 오류 알림 SMTP accepted 1건; API0')

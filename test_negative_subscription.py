@@ -60,6 +60,23 @@ class ProductionRegression(unittest.TestCase):
             self.assertIsNone(mail['Cc'])
             self.assertIsNone(mail['Bcc'])
 
+    def test_cookie_failure_notice_never_claims_no_negative_and_preserves_recipient(self):
+        self.server.__enter__.return_value=self.server
+        from email import message_from_string
+        from email.header import decode_header
+        with patch.dict(os.environ,{'GMAIL_USER':'sender@example.invalid'}), patch.object(bot.Path,'read_text',return_value=json.dumps({'status':'invalid','untrusted':'PRIVATE-NOT-TO-LOG'})):
+            bot.notify_error()
+        call=self.server.sendmail.call_args
+        self.assertEqual(call.args[:2],('sender@example.invalid',[bot.ERROR_EMAIL]))
+        mail=message_from_string(call.args[2])
+        subject=''.join(v.decode(enc or 'utf-8') if isinstance(v,bytes) else v for v,enc in decode_header(mail['Subject']))
+        self.assertIn('인증 확인 필요',subject)
+        self.assertNotIn('탐지 없음',subject)
+        body=mail.get_payload(0).get_payload(decode=True).decode('utf-8')
+        self.assertIn('노트북을 켜서',body)
+        self.assertIn('부정 없음으로 판정한 결과가 아닙니다',body)
+        self.assertNotIn('PRIVATE-NOT-TO-LOG',body)
+
     def test_legacy_errors_use_gmail_and_normal_status_stays_unchanged(self):
         import ast, html
         from datetime import datetime

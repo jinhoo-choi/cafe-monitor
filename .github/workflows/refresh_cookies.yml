@@ -17,7 +17,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: naver-cafe-monitor
+  group: naver-cafe-cookie-renewal
   cancel-in-progress: false
 jobs:
   refresh:
