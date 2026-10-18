@@ -13,7 +13,8 @@ concurrency:
   cancel-in-progress: false
 jobs:
   monitor:
-    runs-on: ubuntu-latest
+    if: github.repository == 'jinhoo-choi/cafe-monitor' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    runs-on: negative-monitor-kr
     timeout-minutes: 30
     steps:
       - name: 코드 체크아웃
@@ -21,6 +22,7 @@ jobs:
         with:
           fetch-depth: 0
       - uses: actions/setup-python@v5
+        if: runner.environment != 'self-hosted'
         with:
           python-version: '3.11'
       - name: 운영 엔진 확인
@@ -30,10 +32,12 @@ jobs:
           import json,os
           value=json.load(open('negative_subscription_config.json'))['engine']
           if value not in {'api','subscription','paused'}: raise ValueError('engine')
+          if os.environ.get('RUNNER_ENVIRONMENT') == 'self-hosted' and value != 'subscription':
+              raise ValueError('Laptop accepts subscription engine only; no API fallback')
           with open(os.environ['GITHUB_OUTPUT'],'a') as output: output.write('value='+value+'\n')
           PY
       - name: 수집 패키지·브라우저 설치
-        if: steps.engine.outputs.value != 'paused'
+        if: steps.engine.outputs.value != 'paused' && runner.environment != 'self-hosted'
         run: |
           pip install requests playwright jsonschema pynacl
           playwright install --with-deps chromium

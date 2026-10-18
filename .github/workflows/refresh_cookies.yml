@@ -22,7 +22,7 @@ concurrency:
 jobs:
   refresh:
     if: github.repository == 'jinhoo-choi/cafe-monitor' && github.ref == 'refs/heads/main'
-    runs-on: ${{ inputs.laptop_check && 'negative-monitor-kr' || 'ubuntu-latest' }}
+    runs-on: negative-monitor-kr
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
