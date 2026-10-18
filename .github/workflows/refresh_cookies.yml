@@ -7,6 +7,10 @@ on:
         type: choice
         options: [check, check_access, auto]
         default: check
+      laptop_check:
+        description: '검증 전 노트북에서 로그인·Secret·메일·큐 쓰기 없는 점검만 실행'
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths: [cookie_refresh_request.json]
@@ -17,18 +21,20 @@ concurrency:
   cancel-in-progress: false
 jobs:
   refresh:
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    if: github.repository == 'jinhoo-choi/cafe-monitor' && github.ref == 'refs/heads/main'
+    runs-on: ${{ inputs.laptop_check && 'negative-monitor-kr' || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
+        if: runner.environment != 'self-hosted'
         with:
           python-version: '3.11'
       - name: 메타데이터 요청 검증
         id: request
         env:
           INPUT_MODE: ${{ inputs.mode }}
+          LAPTOP_CHECK: ${{ inputs.laptop_check }}
         run: |
           python - <<'PY'
           import json,os,re
@@ -40,12 +46,16 @@ jobs:
               assert re.fullmatch(r'[A-Za-z0-9_-]{1,80}',value['request_id'])
               mode=value['mode']
           assert mode in {'check','check_access','auto'}
+          if os.environ.get('LAPTOP_CHECK') == 'true':
+              assert os.environ['GITHUB_EVENT_NAME'] == 'workflow_dispatch'
+              assert mode in {'check','check_access'}
           with open(os.environ['GITHUB_OUTPUT'],'a') as output: output.write('mode='+mode+'\n')
           PY
       - name: HTTP 패키지 설치
+        if: runner.environment != 'self-hosted'
         run: pip install requests
       - name: 인증 패키지·브라우저 설치
-        if: steps.request.outputs.mode != 'check_access'
+        if: steps.request.outputs.mode != 'check_access' && runner.environment != 'self-hosted'
         run: |
           pip install playwright requests pynacl
           playwright install --with-deps chromium
@@ -75,11 +85,11 @@ jobs:
           NEGATIVE_QUEUE_TOKEN: ${{ secrets.NEGATIVE_QUEUE_TOKEN }}
           NAVER_COOKIE_PROBES_JSON: ${{ secrets.NAVER_COOKIE_PROBES_JSON }}
           COOKIE_AUTO_RENEW_ENABLED: ${{ vars.COOKIE_AUTO_RENEW_ENABLED }}
-          NAVER_ID: ${{ secrets.NAVER_ID }}
-          NAVER_PW: ${{ secrets.NAVER_PW }}
-          ADMIN_GITHUB_TOKEN: ${{ secrets.NEGATIVE_QUEUE_TOKEN }}
-          GMAIL_USER: ${{ secrets.GMAIL_USER }}
-          GMAIL_APP_PW: ${{ secrets.GMAIL_APP_PW }}
+          NAVER_ID: ${{ steps.request.outputs.mode == 'auto' && secrets.NAVER_ID || '' }}
+          NAVER_PW: ${{ steps.request.outputs.mode == 'auto' && secrets.NAVER_PW || '' }}
+          ADMIN_GITHUB_TOKEN: ${{ steps.request.outputs.mode == 'auto' && secrets.NEGATIVE_QUEUE_TOKEN || '' }}
+          GMAIL_USER: ${{ steps.request.outputs.mode == 'auto' && secrets.GMAIL_USER || '' }}
+          GMAIL_APP_PW: ${{ steps.request.outputs.mode == 'auto' && secrets.GMAIL_APP_PW || '' }}
         run: python refresh_cookies.py --mode "$MODE"
       - name: 쿠키·임시 인증자료 제거
         if: always()
