@@ -14,7 +14,7 @@ concurrency:
 jobs:
   monitor:
     if: github.repository == 'jinhoo-choi/cafe-monitor' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
-    runs-on: negative-monitor-kr
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: 코드 체크아웃
@@ -54,18 +54,25 @@ jobs:
               Path('naver_cookies.json').write_text(state)
               Path('naver_cookies.json').chmod(0o600)
           PY
-      - name: 수집 전 쿠키 점검·조건부 갱신 — API0
-        if: steps.engine.outputs.value == 'subscription' && inputs.dry_run != true
+      - name: 클라우드 출구 국가 진단 — dry-run만
+        if: inputs.dry_run == true
+        run: |
+          python - <<'PY'
+          import json,urllib.request
+          try:
+              with urllib.request.urlopen('https://ipinfo.io/json',timeout=10) as response:
+                  value=json.load(response)
+              print(json.dumps({'egress_country':value.get('country','unknown')}))
+          except Exception:
+              print('egress_country=unverified')
+          PY
+      - name: 저장된 쿠키의 회원 본문 확인 — 로그인0·갱신0·메일0·큐쓰기0
+        if: steps.engine.outputs.value == 'subscription'
         env:
           NEGATIVE_QUEUE_TOKEN: ${{ secrets.NEGATIVE_QUEUE_TOKEN }}
           NAVER_COOKIE_PROBES_JSON: ${{ secrets.NAVER_COOKIE_PROBES_JSON }}
-          COOKIE_AUTO_RENEW_ENABLED: ${{ vars.COOKIE_AUTO_RENEW_ENABLED }}
-          NAVER_ID: ${{ secrets.NAVER_ID }}
-          NAVER_PW: ${{ secrets.NAVER_PW }}
-          ADMIN_GITHUB_TOKEN: ${{ secrets.NEGATIVE_QUEUE_TOKEN }}
-          GMAIL_USER: ${{ secrets.GMAIL_USER }}
-          GMAIL_APP_PW: ${{ secrets.GMAIL_APP_PW }}
-        run: python refresh_cookies.py --mode auto
+          COOKIE_AUTO_RENEW_ENABLED: 'true'
+        run: python refresh_cookies.py --mode check
       - name: 구독 회차 수집 — API0·운영 발송0·이력 쓰기0
         if: steps.engine.outputs.value == 'subscription'
         env:
