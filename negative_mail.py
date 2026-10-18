@@ -150,7 +150,7 @@ def render_email(alert_posts, crawled_count, keyword_count, unresolved_posts=Non
     else:
         subject      = f"[부정여론 탐지] {now_kst.strftime('%m')}월 {now_kst.strftime('%d')}일 {now_kst.strftime('%H')}시 기준 | 확인필요"
         banner_badge = f"확인필요 · {review_label} {len(unresolved_posts)}건"
-        banner_title = f"부정여론 없음 — {review_label} {len(unresolved_posts)}건 확인 필요"
+        banner_title = f"{review_label} {len(unresolved_posts)}건 — 부정 여부 확인 필요"
 
     sorted_posts = alert_posts  # main()에서 이미 score 내림차순 정렬됨
     cards_html = "".join(build_card(p, i+1, total) for i, p in enumerate(sorted_posts))
