@@ -13,7 +13,9 @@ class LaptopGuard(unittest.TestCase):
             path.write_text(json.dumps({'inputs':inputs if inputs is not None else {'mode':'check','laptop_check':'true'}}))
             env=dict(os.environ,GITHUB_REPOSITORY=repo,GITHUB_REF=ref,GITHUB_EVENT_NAME=event,
                 GITHUB_WORKFLOW_REF=f'{repo}/.github/workflows/{workflow}@{ref}',GITHUB_EVENT_PATH=str(path))
-            return subprocess.run(['bash',str(GUARD)],env=env,capture_output=True).returncode
+            guard=Path(temp)/'job-guard.sh'
+            guard.write_text(GUARD.read_text().replace('/etc/negative-monitor/production-enabled',str(Path(temp)/'production-enabled')))
+            return subprocess.run(['bash',str(guard)],env=env,capture_output=True).returncode
     def test_readonly_body_check_allowed(self): self.assertEqual(self.run_guard(),0)
     def test_readonly_secret_access_allowed(self): self.assertEqual(self.run_guard(inputs={'mode':'check_access','laptop_check':True}),0)
     def test_other_repository_blocked(self): self.assertNotEqual(self.run_guard(repo='attacker/cafe-monitor'),0)
@@ -31,10 +33,7 @@ class LaptopGuard(unittest.TestCase):
             self.assertEqual(v['concurrency'],{'group':'naver-cafe-monitor','cancel-in-progress':'false'})
             self.assertNotIn('schedule',v['on'])
             route=next(iter(v['jobs'].values()))['runs-on']
-            if filename=='monitor.yml': self.assertEqual(route,'ubuntu-latest')
-            else:
-                self.assertIn('inputs.laptop_check',route)
-                self.assertNotIn('vars.',route)
+            self.assertEqual(route,'negative-monitor-kr')
         v=yaml.load((ROOT/'.github/workflows/refresh_cookies.yml').read_text(),Loader=yaml.BaseLoader)
         self.assertEqual(v['on']['push']['paths'],['cookie_refresh_request.json'])
         self.assertEqual(v['on']['workflow_dispatch']['inputs']['laptop_check']['default'],'false')
