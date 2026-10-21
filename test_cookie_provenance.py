@@ -4,6 +4,41 @@ import cookie_auth
 
 
 class ProbeProvenance(unittest.TestCase):
+    def test_cookie_store_and_request_delivery_are_independent_of_bearer_auth(self):
+        request, context = MagicMock(), MagicMock()
+        request.url='https://article.cafe.naver.com/gw/v4/cafes/100/articles/101'
+        context.cookies.return_value=[{'name':'NID_AUT','value':'PRIVATE-A'},{'name':'NID_SES','value':'PRIVATE-B'}]
+        for headers, cookie_status, authorization in [({},'missing','missing'),
+                ({'authorization':'Bearer PRIVATE-TOKEN'},'missing','bearer'),
+                ({'cookie':'NID_AUT=PRIVATE-A; NID_SES=PRIVATE-B'},'present','missing')]:
+            request.all_headers.return_value=headers
+            value=cookie_auth.request_auth_transport(request,context)
+            self.assertEqual(set(value['cookies'].values()),{cookie_status})
+            self.assertEqual(value['authorization'],authorization)
+            self.assertEqual(set(value['eligible_cookies_after_response'].values()),{'present'})
+            self.assertNotIn('PRIVATE',str(value))
+
+    def test_cookie_eligibility_unknown_and_absent_are_distinct(self):
+        context=MagicMock()
+        context.cookies.return_value=[]
+        self.assertEqual(set(cookie_auth.browser_cookie_presence(context,'https://cafe.naver.com/').values()),{'missing'})
+        context.cookies.side_effect=RuntimeError('PRIVATE-CONTEXT')
+        self.assertEqual(set(cookie_auth.browser_cookie_presence(context,'https://cafe.naver.com/').values()),{'unverified'})
+
+    def test_navigation_delivery_and_pre_navigation_cookie_store_are_observed(self):
+        page, response, diagnostic=MagicMock(), MagicMock(), {}
+        page.url='https://cafe.naver.com/f-e/cafes/100/articles/101'
+        page.frames=[]; page.goto.return_value.status=200
+        page.context.cookies.return_value=[{'name':'NID_AUT','value':'PRIVATE-A'}]
+        response.url=page.url; response.request.url=page.url
+        response.request.resource_type='document'
+        response.request.all_headers.return_value={'cookie':'NID_AUT=PRIVATE-A'}
+        page.on.side_effect=lambda event,callback: callback(response)
+        self.assertEqual(cookie_auth.page_status(page,page.url,diagnostic),'unknown')
+        self.assertEqual(diagnostic['browser_cookies_before_navigation'],{'NID_AUT':'present','NID_SES':'missing'})
+        self.assertEqual(diagnostic['navigation_auth_transport'][0]['cookies'],{'NID_AUT':'present','NID_SES':'missing'})
+        self.assertNotIn('PRIVATE',str(diagnostic))
+
     def test_matching_article_cookie_delivery_reports_names_only(self):
         for header, expected in [('NID_AUT=PRIVATE-A; NID_SES=PRIVATE-B', 'present'), ('tracking=PRIVATE-C', 'missing')]:
             page, response, diagnostic = MagicMock(), MagicMock(), {}

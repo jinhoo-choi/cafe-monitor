@@ -22,6 +22,7 @@ def storage_status(state, instant=None, diagnostic=None):
         diagnostic['state_format'] = 'invalid'
         diagnostic['auth_cookies'] = {name: 'missing' for name in sorted(CORE)}
         diagnostic['auth_cookie_scope'] = {name: 'missing' for name in sorted(CORE)}
+        diagnostic['auth_cookie_policy'] = {name: [] for name in sorted(CORE)}
     if not isinstance(state, dict) or not isinstance(state.get('cookies'), list):
         return 'invalid'
     if diagnostic is not None:
@@ -60,6 +61,12 @@ def storage_status(state, instant=None, diagnostic=None):
             scope = 'root' if domain == 'naver.com' and cookie.get('path') == '/' else 'restricted'
             previous = diagnostic['auth_cookie_scope'][name]
             diagnostic['auth_cookie_scope'][name] = scope if previous == 'missing' else 'multiple'
+            diagnostic['auth_cookie_policy'][name].append({
+                'subdomains': str(cookie.get('domain', '')).startswith('.'),
+                'secure': cookie.get('secure') if isinstance(cookie.get('secure'), bool) else 'unspecified',
+                'same_site': cookie.get('sameSite') if cookie.get('sameSite') in {'Strict', 'Lax', 'None'} else 'unspecified',
+                'partitioned': bool(cookie.get('partitionKey')),
+                'session': expiry == -1})
     return 'present' if found == CORE else 'invalid'
 
 
@@ -119,6 +126,36 @@ def article_api_body(obj, cafe_id, article_id):
     return readable(' '.join(parsed.text)) or parsed.media
 
 
+def browser_cookie_presence(context, url):
+    """Let the browser decide URL eligibility; return only two fixed cookie names."""
+    unknown = {name: 'unverified' for name in sorted(CORE)}
+    try:
+        cookies = context.cookies([url])
+        if not isinstance(cookies, list):
+            return unknown
+        names = {cookie.get('name') for cookie in cookies if isinstance(cookie, dict)}
+        return {name: 'present' if name in names else 'missing' for name in sorted(CORE)}
+    except Exception:
+        return unknown
+
+
+def request_auth_transport(request, context):
+    """Headers and cookie values stay in memory, never in diagnostics or exceptions."""
+    value = {'cookies': {name: 'unverified' for name in sorted(CORE)}, 'authorization': 'unverified',
+             'eligible_cookies_after_response': browser_cookie_presence(context, request.url)}
+    try:
+        headers = request.all_headers()
+        if isinstance(headers, dict):
+            names = {part.partition('=')[0].strip() for part in headers.get('cookie', '').split(';')}
+            value['cookies'] = {name: 'present' if name in names else 'missing' for name in sorted(CORE)}
+            authorization = headers.get('authorization', '')
+            value['authorization'] = ('bearer' if authorization.lower().startswith('bearer ')
+                                      else 'other' if authorization else 'missing')
+    except Exception:
+        pass
+    return value
+
+
 def page_status(page, url, diagnostic=None):
     """A public homepage or HTTP 200 never proves authenticated access."""
     target = re.search(r'/cafes/(\d+)/articles/(\d+)', urlparse(url).path)
@@ -131,24 +168,23 @@ def page_status(page, url, diagnostic=None):
             and response.request.resource_type in {'fetch', 'xhr'})
     def capture(response):
         try:
+            if diagnostic is not None and response.request.resource_type == 'document':
+                requested, actual = urlparse(url), urlparse(response.url)
+                if (actual.hostname, actual.path) == (requested.hostname, requested.path):
+                    diagnostic.setdefault('navigation_auth_transport', []).append(
+                        request_auth_transport(response.request, page.context))
             if matching(response):
                 article_responses.append(response.status)
                 if diagnostic is not None:
-                    # Read headers only in memory. Record cookie names/presence, never values or headers.
-                    presence = {name: 'unverified' for name in sorted(CORE)}
-                    try:
-                        headers = response.request.all_headers()
-                        if isinstance(headers, dict):
-                            raw = headers.get('cookie', '')
-                            names = {part.partition('=')[0].strip() for part in raw.split(';')}
-                            presence = {name: 'present' if name in names else 'missing' for name in sorted(CORE)}
-                    except Exception:
-                        pass
-                    diagnostic.setdefault('article_cookie_presence', []).append(presence)
+                    transport = request_auth_transport(response.request, page.context)
+                    diagnostic.setdefault('article_cookie_presence', []).append(transport['cookies'])
+                    diagnostic.setdefault('article_auth_transport', []).append(transport)
                 if response.status == 200:
                     api_bodies.append(article_api_body(response.json(), target[1], target[2]))
         except Exception:
             pass
+    if diagnostic is not None:
+        diagnostic['browser_cookies_before_navigation'] = browser_cookie_presence(page.context, url)
     page.on('response', capture)
     try:
         response = None
