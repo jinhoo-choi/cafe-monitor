@@ -24,6 +24,8 @@ jobs:
     if: github.repository == 'jinhoo-choi/cafe-monitor' && github.ref == 'refs/heads/main'
     runs-on: negative-monitor-kr
     timeout-minutes: 10
+    outputs:
+      mode: ${{ steps.request.outputs.mode }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -92,5 +94,41 @@ jobs:
           GMAIL_APP_PW: ${{ steps.request.outputs.mode == 'auto' && secrets.GMAIL_APP_PW || '' }}
         run: python refresh_cookies.py --mode "$MODE"
       - name: 쿠키·임시 인증자료 제거
+        if: always()
+        run: rm -f naver_cookies.json naver_cookie_status.json .naver_cookie_*
+  verify_cloud:
+    name: 클라우드 읽기 전용 본문 재검증
+    needs: refresh
+    if: always() && github.repository == 'jinhoo-choi/cafe-monitor' && github.ref == 'refs/heads/main' && needs.refresh.outputs.mode == 'check' && needs.refresh.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 읽기 전용 검증 패키지
+        run: |
+          pip install playwright requests
+          playwright install --with-deps chromium
+      - name: 기존 Secret 복원
+        env:
+          NAVER_COOKIE_STATE: ${{ secrets.NAVER_COOKIES_JSON }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          state=os.environ.get('NAVER_COOKIE_STATE','')
+          if state:
+              Path('naver_cookies.json').write_text(state)
+              Path('naver_cookies.json').chmod(0o600)
+          PY
+      - name: 본문 확인만 — 로그인0·Secret쓰기0·메일0·수집0
+        env:
+          NEGATIVE_QUEUE_TOKEN: ${{ secrets.NEGATIVE_QUEUE_TOKEN }}
+          NAVER_COOKIE_PROBES_JSON: ${{ secrets.NAVER_COOKIE_PROBES_JSON }}
+          COOKIE_AUTO_RENEW_ENABLED: 'true'
+        run: python refresh_cookies.py --mode check
+      - name: 쿠키·진단 파일 제거
         if: always()
         run: rm -f naver_cookies.json naver_cookie_status.json .naver_cookie_*

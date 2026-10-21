@@ -47,6 +47,21 @@ class LaptopGuard(unittest.TestCase):
 
 
 class CloudCollectionSplit(unittest.TestCase):
+    def test_followup_cloud_check_is_readonly_even_if_laptop_fails(self):
+        value=yaml.load((ROOT/'.github/workflows/refresh_cookies.yml').read_text(),Loader=yaml.BaseLoader)
+        job=value['jobs']['verify_cloud']
+        self.assertEqual(job['needs'],'refresh')
+        self.assertIn('always()',job['if'])
+        self.assertIn("outputs.mode == 'check'",job['if'])
+        self.assertEqual(job['runs-on'],'ubuntu-latest')
+        script='\n'.join(s.get('run','') for s in job['steps'])
+        self.assertIn('refresh_cookies.py --mode check',script)
+        self.assertNotIn('negative_subscription.py',script)
+        self.assertNotIn('--mode auto',script)
+        env={k for s in job['steps'] for k in s.get('env',{})}
+        self.assertEqual(env,{'NAVER_COOKIE_STATE','NEGATIVE_QUEUE_TOKEN','NAVER_COOKIE_PROBES_JSON','COOKIE_AUTO_RENEW_ENABLED'})
+        self.assertTrue(all('if' not in s or s['if']=='always()' for s in job['steps']))
+
     def test_cloud_preflight_is_readonly_and_fail_closed(self):
         value=yaml.load((ROOT/'.github/workflows/monitor.yml').read_text(),Loader=yaml.BaseLoader)
         steps=value['jobs']['monitor']['steps']

@@ -1,5 +1,5 @@
 {
   "operation": "cookie_preflight",
-  "mode": "auto",
-  "request_id": "cookie-recovery-20261021-once"
+  "mode": "check",
+  "request_id": "auth-diagnostic-check-20261021"
 }
