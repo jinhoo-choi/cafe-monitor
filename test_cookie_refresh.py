@@ -77,7 +77,7 @@ class CookieTests(unittest.TestCase):
     def test_login_failure_reports_only_fixed_phase_and_closes_context(self):
         stages = [('new_context', 'login_context_unknown'),
                   ('goto', 'login_navigation_unknown'), ('fill', 'login_form_unknown'),
-                  ('click', 'login_submit_unknown'), ('inner_text_result', 'login_result_unknown'),
+                  ('click', 'login_submit_unknown'), ('wait_for_function', 'login_result_unknown'),
                   ('storage_state', 'login_storage_unknown')]
         for operation, expected in stages:
             browser, context, page = MagicMock(), MagicMock(), MagicMock()
@@ -85,14 +85,13 @@ class CookieTests(unittest.TestCase):
             context.new_page.return_value = page
             page.inner_text.return_value = ''
             page.url = 'https://www.naver.com/'
+            page.wait_for_function.return_value.json_value.return_value = 'redirected'
             context.storage_state.return_value = STATE
             error = RuntimeError('FAKE_PASSWORD_COOKIE_PAGE_CONTENT')
             if operation == 'new_context':
                 browser.new_context.side_effect = error
             elif operation == 'storage_state':
                 context.storage_state.side_effect = error
-            elif operation == 'inner_text_result':
-                page.inner_text.side_effect = [''] * len(auth.CHALLENGES) + [error]
             else:
                 getattr(page, operation).side_effect = error
             with self.subTest(operation=operation), patch.dict(os.environ, NAVER_ID='FAKE', NAVER_PW='FAKE'):
@@ -110,6 +109,50 @@ class CookieTests(unittest.TestCase):
             renewal.login_once(browser)
         page.fill.assert_not_called()
         page.click.assert_not_called()
+
+    def test_login_terminal_outcomes_are_distinct_and_sanitized(self):
+        for outcome in ['human_required', 'credentials_rejected', 'login_form_rejected', 'redirected']:
+            browser, checks = MagicMock(), {}
+            page = browser.new_context.return_value.new_page.return_value
+            page.inner_text.return_value = ''
+            page.wait_for_function.return_value.json_value.return_value = outcome
+            browser.new_context.return_value.storage_state.return_value = STATE
+            with self.subTest(outcome=outcome), patch.dict(os.environ, NAVER_ID='FAKE', NAVER_PW='FAKE'):
+                if outcome == 'redirected':
+                    self.assertEqual(renewal.login_once(browser, checks), STATE)
+                else:
+                    with self.assertRaisesRegex(renewal.RenewalError, '^'+outcome+'$'):
+                        renewal.login_once(browser, checks)
+                    browser.new_context.return_value.storage_state.assert_not_called()
+            self.assertEqual(checks, {'login_outcome': outcome})
+            page.wait_for_timeout.assert_not_called()
+            self.assertEqual(page.wait_for_function.call_args.kwargs['timeout'], 20000)
+            browser.new_context.return_value.close.assert_called_once()
+
+    def test_login_redirect_without_cookie_and_result_timeout_are_separate(self):
+        for timeout in [False, True]:
+            browser, checks = MagicMock(), {}
+            page = browser.new_context.return_value.new_page.return_value
+            page.inner_text.return_value = ''
+            page.wait_for_function.return_value.json_value.return_value = 'redirected'
+            browser.new_context.return_value.storage_state.return_value = {'cookies': []}
+            if timeout:
+                page.wait_for_function.side_effect = TimeoutError('SECRET-EXCEPTION-TEXT')
+            with self.subTest(timeout=timeout), patch.dict(os.environ, NAVER_ID='FAKE', NAVER_PW='FAKE'):
+                with self.assertRaisesRegex(renewal.RenewalError,
+                        '^login_result_timeout$' if timeout else '^login_cookie_missing$'):
+                    renewal.login_once(browser, checks)
+            self.assertNotIn('SECRET', str(checks))
+
+    def test_structural_scope_diagnostic_does_not_claim_cookie_delivery(self):
+        for domain, path in [('nid.naver.com','/'),('.naver.com','/nidlogin'),('.naver.com','/')]:
+            state, diagnostic = copy.deepcopy(STATE), {}
+            for cookie in state['cookies']:
+                cookie.update(domain=domain, path=path)
+            self.assertEqual(auth.storage_status(state, diagnostic=diagnostic), 'present')
+            expected = 'root' if domain == '.naver.com' and path == '/' else 'restricted'
+            self.assertEqual(set(diagnostic['auth_cookie_scope'].values()), {expected})
+            self.assertNotIn('FAKE', json.dumps(diagnostic))
 
     def test_key_service_failure_is_bounded_and_not_mislabeled_permission(self):
         with patch.dict(os.environ,{'ADMIN_GITHUB_TOKEN':'FAKE_SECRET','GITHUB_REPOSITORY':renewal.REPO}), \
@@ -313,7 +356,7 @@ class RunTests(unittest.TestCase):
                  patch.object(renewal, 'store_secret', side_effect=renewal.RenewalError('storage_uncertain')
                               if outcome == 'storage_uncertain' else None) as secret, \
                  patch.object(renewal, 'login_once') as login, patch.object(renewal, 'owner_notice'):
-                self.assertEqual(renewal.run('auto'), 0)
+                self.assertEqual(renewal.run('auto'), 2)
                 self.assertEqual(secret.call_count, 1 if outcome == 'storage_uncertain' else 0)
                 self.assertEqual(Path('naver_cookies.json').read_bytes(), before)
                 login.assert_not_called()
@@ -378,7 +421,7 @@ class RunTests(unittest.TestCase):
         for status in ['unknown','permission_denied','human_required','probe_unconfirmed']:
             with patch.object(renewal,'access_status',return_value=status), \
                  patch.object(renewal,'login_once') as login, patch.object(renewal,'store_secret') as secret:
-                self.assertEqual(renewal.run('auto'), 0)
+                self.assertEqual(renewal.run('auto'), 2)
                 login.assert_not_called(); secret.assert_not_called()
 
     def successful_mocks(self):
@@ -404,7 +447,7 @@ class RunTests(unittest.TestCase):
              patch.object(renewal,'login_once',side_effect=renewal.RenewalError('human_required')) as login, \
              patch.object(renewal,'store_secret') as secret, patch.object(renewal,'owner_notice'):
             self.assertEqual(renewal.run('renew'), 2)
-            self.assertEqual(renewal.run('auto'), 0)
+            self.assertEqual(renewal.run('auto'), 2)
             self.assertEqual(login.call_count, 1); secret.assert_not_called()
             self.assertEqual(queue.writes, 1)
 

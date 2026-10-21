@@ -4,6 +4,31 @@ import cookie_auth
 
 
 class ProbeProvenance(unittest.TestCase):
+    def test_matching_article_cookie_delivery_reports_names_only(self):
+        for header, expected in [('NID_AUT=PRIVATE-A; NID_SES=PRIVATE-B', 'present'), ('tracking=PRIVATE-C', 'missing')]:
+            page, response, diagnostic = MagicMock(), MagicMock(), {}
+            page.url='https://cafe.naver.com/f-e/cafes/100/articles/101'
+            page.frames=[]; page.goto.return_value.status=200
+            response.url='https://article.cafe.naver.com/gw/v4/cafes/100/articles/101'
+            response.status=401; response.request.resource_type='xhr'
+            response.request.all_headers.return_value={'cookie':header}
+            page.on.side_effect=lambda event, callback:callback(response)
+            self.assertEqual(cookie_auth.page_status(page,page.url,diagnostic),'auth_required')
+            self.assertEqual(diagnostic['article_cookie_presence'],[{'NID_AUT':expected,'NID_SES':expected}])
+            self.assertNotIn('PRIVATE',str(diagnostic))
+
+    def test_unavailable_cookie_headers_do_not_look_missing(self):
+        page, response, diagnostic = MagicMock(), MagicMock(), {}
+        page.url='https://cafe.naver.com/f-e/cafes/100/articles/101'
+        page.frames=[]; page.goto.return_value.status=200
+        response.url='https://article.cafe.naver.com/gw/v4/cafes/100/articles/101'
+        response.status=401; response.request.resource_type='xhr'
+        response.request.all_headers.side_effect=RuntimeError('PRIVATE-HEADERS')
+        page.on.side_effect=lambda event, callback:callback(response)
+        self.assertEqual(cookie_auth.page_status(page,page.url,diagnostic),'auth_required')
+        self.assertEqual(set(diagnostic['article_cookie_presence'][0].values()),{'unverified'})
+        self.assertNotIn('PRIVATE',str(diagnostic))
+
     def test_collector_does_not_treat_wrapper_comments_as_article_body(self):
         import negative_verification
         module=negative_verification.collector()

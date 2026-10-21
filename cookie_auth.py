@@ -21,6 +21,7 @@ def storage_status(state, instant=None, diagnostic=None):
     if diagnostic is not None:
         diagnostic['state_format'] = 'invalid'
         diagnostic['auth_cookies'] = {name: 'missing' for name in sorted(CORE)}
+        diagnostic['auth_cookie_scope'] = {name: 'missing' for name in sorted(CORE)}
     if not isinstance(state, dict) or not isinstance(state.get('cookies'), list):
         return 'invalid'
     if diagnostic is not None:
@@ -56,6 +57,9 @@ def storage_status(state, instant=None, diagnostic=None):
         found.add(name)
         if diagnostic is not None:
             diagnostic['auth_cookies'][name] = 'present'
+            scope = 'root' if domain == 'naver.com' and cookie.get('path') == '/' else 'restricted'
+            previous = diagnostic['auth_cookie_scope'][name]
+            diagnostic['auth_cookie_scope'][name] = scope if previous == 'missing' else 'multiple'
     return 'present' if found == CORE else 'invalid'
 
 
@@ -129,6 +133,18 @@ def page_status(page, url, diagnostic=None):
         try:
             if matching(response):
                 article_responses.append(response.status)
+                if diagnostic is not None:
+                    # Read headers only in memory. Record cookie names/presence, never values or headers.
+                    presence = {name: 'unverified' for name in sorted(CORE)}
+                    try:
+                        headers = response.request.all_headers()
+                        if isinstance(headers, dict):
+                            raw = headers.get('cookie', '')
+                            names = {part.partition('=')[0].strip() for part in raw.split(';')}
+                            presence = {name: 'present' if name in names else 'missing' for name in sorted(CORE)}
+                    except Exception:
+                        pass
+                    diagnostic.setdefault('article_cookie_presence', []).append(presence)
                 if response.status == 200:
                     api_bodies.append(article_api_body(response.json(), target[1], target[2]))
         except Exception:

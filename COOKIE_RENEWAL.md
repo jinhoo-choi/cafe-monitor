@@ -56,7 +56,20 @@ Actions의 수동 실행은 기본 `check`다. `check`는 새 로그인·Secret�
 `check_access`는 인사이트 전환용 키를 연결한 ADMIN_GITHUB_TOKEN 환경변수로 Secrets 공개키 GET만 진단한다.
 쿠키 복원·브라우저·네이버 로그인·큐 쓰기·Secret PUT·메일은 실행하지 않는다.
 공개 `cookie_refresh_request.json`은 `operation`, `mode`, `request_id`만 받으며 `main`에서만 실행한다.
-`auto`는 확인되지 않은 상태에서도 공개 범위 수집을 지속할 수 있도록 종료 코드와 인증 상태를 구분한다.
+`auto`도 인증 실패·미확인·갱신 실패 시 종료 코드 2로 종료한다. Actions의 성공 표시가 인증 실패를 가리지 않도록 한다.
+공개 수집 분리는 별도 변경 대상이며 현재 클라우드 수집의 사전 인증 검사는 그대로 유지한다.
+
+`check` 요청은 국내 노트북 점검 뒤 클라우드의 읽기 전용 점검도 수행한다. 국내 본문 확인이 실패해도
+모드 검증이 완료된 `check`라면 클라우드 결과를 따로 확인한다. 두 단계 모두 비밀번호·Secret 쓰기·메일·
+수집·운영 이력을 사용하지 않는다. 클라우드 후속 점검에는 로그인 및 발송 자격 증명을 전달하지 않는다.
+
+본문 API 요청의 `NID_AUT`/`NID_SES`는 `present` / `missing` / `unverified`만 기록한다.
+쿠키 값·요청 헤더·원문 주소를 출력하지 않는다. 저장 상태의 `root` / `restricted` / `multiple`은
+쿠키 범위 진단이며 정상 인증 판정은 계속 두 실제 회원 본문에만 근거한다.
+
+로그인 결과는 고정 2.5초 대기 대신 최대 20초 동안 결과 신호를 기다린다.
+`credentials_rejected`, `login_form_rejected`, `human_required`, `login_result_timeout`,
+`login_cookie_missing`을 구분한다. 추가 인증은 우회하지 않으며 새 로그인은 기존 24시간 제한 내 1회뿐이다.
 
 저장소 Actions variable `COOKIE_AUTO_RENEW_ENABLED=false`로 자동 갱신을 끌 수 있다.
 수집 엔진, 수신자, 분석 정책, seen 이력은 바꾸지 않는다. 기존 쿠키 복구가 가능한지 별도로 확인해야 한다.

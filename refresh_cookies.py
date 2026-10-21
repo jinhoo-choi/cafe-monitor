@@ -152,16 +152,37 @@ def login_once(browser, checks=None):
         page.fill('#pw', os.environ['NAVER_PW'])
         phase = 'login_submit_unknown'
         page.click('#loginBtn_column:visible, #loginBtn_row:visible, [id="log.login"]:visible', timeout=10000)
-        page.wait_for_timeout(2500)
         phase = 'login_result_unknown'
-        if any(hint in page.inner_text('body') for hint in CHALLENGES):
-            raise RenewalError('human_required')
-        if 'nidlogin' in page.url:
-            raise RenewalError('login_failed')
+        # Wait for a terminal result, not a fixed sleep. Only fixed labels leave the page.
+        try:
+            outcome = page.wait_for_function("""(challenges) => {
+                const text = document.body?.innerText || '';
+                if (challenges.some(hint => text.includes(hint))) return 'human_required';
+                const errors = [...document.querySelectorAll('#err_common, .error_message')]
+                    .filter(el => el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden')
+                    .map(el => el.innerText || '').join(' ');
+                if (errors.trim()) {
+                    if (/비밀번호|아이디/.test(errors) && /확인|일치|잘못/.test(errors))
+                        return 'credentials_rejected';
+                    return 'login_form_rejected';
+                }
+                if (!location.pathname.includes('nidlogin')) return 'redirected';
+                return false;
+            }""", arg=list(CHALLENGES), timeout=20000).json_value()
+        except Exception as error:
+            if type(error).__name__ == 'TimeoutError':
+                raise RenewalError('login_result_timeout') from None
+            raise
+        if outcome not in {'human_required', 'credentials_rejected', 'login_form_rejected', 'redirected'}:
+            raise RenewalError('login_result_unknown')
+        if checks is not None:
+            checks['login_outcome'] = outcome
+        if outcome != 'redirected':
+            raise RenewalError(outcome)
         phase = 'login_storage_unknown'
         state = context.storage_state()
         if storage_status(state) != 'present':
-            raise RenewalError('login_failed')
+            raise RenewalError('login_cookie_missing')
         return state
     except RenewalError:
         raise
@@ -238,10 +259,10 @@ def run(mode='auto'):
             urls = probe_urls(json.dumps((probes or {}).get('urls', [])))
         except Exception:
             report('probe_config_unavailable', login_attempted=False, secret_updated=False)
-            return 0 if mode == 'auto' else 2
+            return 2
     if not urls:
         report('not_configured', login_attempted=False, secret_updated=False)
-        return 0 if mode == 'auto' else 2
+        return 2
     from playwright.sync_api import sync_playwright
     queue, attempted, secret_updated, access = None, False, False, 'unknown'
     checks = {'cookie_file_present': COOKIE_FILE.is_file(),
@@ -279,7 +300,7 @@ def run(mode='auto'):
                     return 0
                 if mode == 'check' or status != 'invalid':
                     report(status, login_attempted=False, secret_updated=False, probe_checks=checks)
-                    return 0 if mode == 'auto' else 2
+                    return 2
                 if not os.environ.get('NAVER_ID') or not os.environ.get('NAVER_PW'):
                     raise RenewalError('login_credentials_missing')
                 queue = live_queue()
@@ -309,7 +330,7 @@ def run(mode='auto'):
         details = {'http_status': error.http_status} if isinstance(error, RenewalError) and error.http_status else {}
         report(status, login_attempted=attempted, secret_updated=secret_updated, notification=notice,
                access_status=access, probe_checks=checks, **details)
-        return 0 if mode == 'auto' else 2
+        return 2
 
 
 if __name__ == '__main__':
