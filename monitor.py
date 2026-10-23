@@ -248,7 +248,7 @@ def log(msg):
 
 def send_status_email(status, detail=""):
     """
-    정상 탐지 없음은 OWNER_EMAIL, 오류·쿠키 경고는 ERROR_EMAIL로 발송.
+    탐지 없음·오류·쿠키 경고는 ERROR_EMAIL로 발송.
     status: "no_result" | "warning" | "error"
     """
     if DRY_RUN:
@@ -314,7 +314,7 @@ def send_status_email(status, detail=""):
 </body>
 </html>"""
 
-    receiver = OWNER_EMAIL if status == "no_result" else ERROR_EMAIL
+    receiver = ERROR_EMAIL
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"]    = _from_header()
@@ -1379,7 +1379,7 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count, unresolved_posts
     else:
         bcc_all = []
         kind = "발신자 전용 (확인필요 단독)"
-    targets = list(dict.fromkeys([OWNER_EMAIL] + ([GMAIL_USER] + bcc_all if total > 0 else [])))  # 본인 포함, 중복 제거(순서 유지)
+    targets = list(dict.fromkeys([OWNER_EMAIL, GMAIL_USER] + bcc_all)) if total > 0 else [ERROR_EMAIL]  # 본인 포함, 중복 제거(순서 유지)
 
     # Operational review details remain in the owner copy only.
     from negative_mail import render_email
@@ -1404,7 +1404,7 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count, unresolved_posts
             m["To"] = _addr_header(addr)
             m["Date"] = formatdate(localtime=True)
             m["Message-ID"] = make_msgid(domain="gmail.com")
-            m.attach(MIMEText(html_body if addr == OWNER_EMAIL else executive_body, "html", "utf-8"))
+            m.attach(MIMEText(html_body if total == 0 or addr == OWNER_EMAIL else executive_body, "html", "utf-8"))
             try:
                 r = s.sendmail(GMAIL_USER, [addr], m.as_string())
                 if r:  # 단건 발송에선 이론상 빈 dict지만 방어적으로 유지
