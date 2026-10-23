@@ -93,7 +93,7 @@ def recipients(negative_count):
     cc = [a.strip() for a in os.environ.get('EMAIL_CC','').split(',') if a.strip()]
     if not sender or not notify or not os.environ.get('GMAIL_APP_PW'):
         raise RuntimeError('기존 SMTP 수신자·인증 설정 누락')
-    targets = list(dict.fromkeys([OWNER_EMAIL]+([sender]+notify+cc if negative_count else [])))
+    targets = list(dict.fromkeys([OWNER_EMAIL]+[sender]+notify+cc)) if negative_count else [ERROR_EMAIL]
     if any('\n' in a or '\r' in a or '@' not in a for a in targets):
         raise ValueError('SMTP 수신자 형식 오류')
     return sender, targets
@@ -219,7 +219,7 @@ def consume(queue, job_id):
             settings(queue,live=True)
             change(queue,job_id,lambda row:row['receipts'].update({key:'sending'}))
             try:
-                refused = server.sendmail(sender,[address],message(subject,body if address == OWNER_EMAIL else executive_body,sender,address))
+                refused = server.sendmail(sender,[address],message(subject,body if not selected or address == OWNER_EMAIL else executive_body,sender,address))
             except smtplib.SMTPRecipientsRefused:
                 change(queue,job_id,lambda row:row['receipts'].update({key:'rejected'}))
                 raise RuntimeError('운영 수신자 SMTP 거부') from None

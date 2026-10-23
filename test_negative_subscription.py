@@ -38,7 +38,7 @@ class ProductionRegression(unittest.TestCase):
 
     def test_status_only_never_goes_to_distinct_sender_or_executives(self):
         with patch.dict(os.environ,{'GMAIL_USER':'sender@example.invalid'}):
-            self.assertEqual(bot.recipients(0),('sender@example.invalid',[bot.OWNER_EMAIL]))
+            self.assertEqual(bot.recipients(0),('sender@example.invalid',[bot.ERROR_EMAIL]))
 
     def test_error_cookie_notices_and_verification_use_only_gmail(self):
         import refresh_cookies
@@ -77,7 +77,7 @@ class ProductionRegression(unittest.TestCase):
         self.assertIn('부정 없음으로 판정한 결과가 아닙니다',body)
         self.assertNotIn('PRIVATE-NOT-TO-LOG',body)
 
-    def test_legacy_errors_use_gmail_and_normal_status_stays_unchanged(self):
+    def test_legacy_operational_statuses_use_only_gmail(self):
         import ast, html
         from datetime import datetime
         from email import message_from_string
@@ -96,7 +96,7 @@ class ProductionRegression(unittest.TestCase):
         namespace['send_status_email']('no_result')
         self.assertEqual(self.server.sendmail.call_count,4)
         for call, recipient in zip(self.server.sendmail.call_args_list,
-                                   [bot.ERROR_EMAIL] * 3 + [bot.OWNER_EMAIL]):
+                                   [bot.ERROR_EMAIL] * 4):
             self.assertEqual(call.args[:2],('sender@example.invalid',[recipient]))
             mail=message_from_string(call.args[2])
             self.assertEqual(mail['To'],recipient)
@@ -168,6 +168,18 @@ class ProductionRegression(unittest.TestCase):
             else:
                 self.assertNotIn('본문 미수집',body)
                 self.assertNotIn('https://example.invalid/review',body)
+
+        self.server.sendmail.reset_mock()
+        namespace['send_alert_batch']([],1,1,[unresolved])
+        self.server.sendmail.assert_called_once()
+        call=self.server.sendmail.call_args
+        self.assertEqual(call.args[1],[bot.ERROR_EMAIL])
+        mail=message_from_string(call.args[2])
+        self.assertEqual(mail['To'],bot.ERROR_EMAIL)
+        self.assertIsNone(mail['Cc'])
+        self.assertIsNone(mail['Bcc'])
+        body=mail.get_payload(0).get_payload(decode=True).decode('utf-8')
+        self.assertIn('https://example.invalid/review',body)
 
     def setUp(self):
         self.stack=ExitStack()
@@ -276,25 +288,25 @@ class ProductionRegression(unittest.TestCase):
         with self.assertRaises(RuntimeError):bot.consume(self.queue,self.job['job_id'])
         self.assertEqual(self.server.sendmail.call_count,2)
 
-    def test_no_negative_sends_only_owner_and_holds_missing_body(self):
+    def test_no_negative_sends_only_gmail_and_holds_missing_body(self):
         self.job['input']['items'][0]['body_status']='missing'
         self.result['posts'][0].update(verdict='needs_review',score=None,category='unresolved',urgency='watch',evidence_quotes=[])
         self.result['groups']=[]
         self.rehash();self.reload_queue()
         bot.consume(self.queue,self.job['job_id'])
         self.server.sendmail.assert_called_once()
-        self.assertEqual(self.server.sendmail.call_args.args[1],['111715@koreainvestment.com'])
+        self.assertEqual(self.server.sendmail.call_args.args[1],[bot.ERROR_EMAIL])
         self.assertEqual(json.loads(self.path.read_text()),{})
         self.assertEqual(self.queue.get(self.queue.path)[0]['processed_ids'],[])
         self.assertTrue(self.queue.get('reviews/'+self.job['job_id']+'.json')[0]['retry_next_collection'])
 
-    def test_non_negative_is_saved_after_owner_status_mail(self):
+    def test_non_negative_is_saved_after_gmail_status_mail(self):
         self.result['posts'][0].update(verdict='non_negative',score=0,urgency='watch',category='neutral_other')
         self.result['groups']=[]
         self.reload_queue()
         bot.consume(self.queue,self.job['job_id'])
         self.server.sendmail.assert_called_once()
-        self.assertEqual(self.server.sendmail.call_args.args[1],['111715@koreainvestment.com'])
+        self.assertEqual(self.server.sendmail.call_args.args[1],[bot.ERROR_EMAIL])
         self.assertIn(self.result['posts'][0]['post_id'],json.loads(self.path.read_text()))
 
     def test_verified_or_historical_inputs_never_use_operating_recipients(self):
