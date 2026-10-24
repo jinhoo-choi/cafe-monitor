@@ -1,7 +1,1 @@
-{
-  "operation": "consume",
-  "job_id": "negative-production-40096287601",
-  "self_test": false,
-  "dry_run": false,
-  "request_id": "negative-40096287601-007eae88-b9f3-47ec-b3d3-c5e6fcd7adeb"
-}
+{"operation":"consume","job_id":"negative-production-40140921546","self_test":false,"dry_run":false,"request_id":"negative-40140921546-52b57a63-f6ce-4e80-8e5d-c31d8521992c"}
