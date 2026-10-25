@@ -69,3 +69,10 @@ SMTP envelope와 기존 접수·중복 방지 상태 관리는 유지한다. 확
 
 input.policy_hash와 결과 policy_hash를 현재 negative_policy.json의 canonical JSON SHA-256과 대조한다. 수집 전후, 소비 및 각 수신자 제출 전에 main 정책을 재확인한다. 같은 policy_version 안의 내용 변경도 발송을 보류한다. 해시가 없는 legacy pending은 자동 소비하지 않는다. 이미 종결된 회차·영수증·처리 이력은 변경하거나 재전송하지 않는다.
 
+## 2026-10-25 SMTP 발신 계정 중복 사본 제거
+
+그룹스 회원의 중복 수신을 막기 위해 구독·기존 발송 경로 모두 `GMAIL_USER`를
+일반 보고 수신자에 자동 추가하지 않는다. 운영자 진단 사본과 명시된
+`NOTIFY_EMAIL`·`EMAIL_CC` 수신자는 유지한다. 오류·쿠키·확인필요·탐지 없음 및
+본인 검수는 기존 Gmail 전용 경로를 유지한다. 이미 접수된 회차를 재발송하지 않는다.
+

@@ -1379,7 +1379,8 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count, unresolved_posts
     else:
         bcc_all = []
         kind = "발신자 전용 (확인필요 단독)"
-    targets = list(dict.fromkeys([OWNER_EMAIL, GMAIL_USER] + bcc_all)) if total > 0 else [ERROR_EMAIL]  # 본인 포함, 중복 제거(순서 유지)
+    # SMTP 로그인 주소를 자동 수신자로 추가하면 그룹스 회원에게 중복 전달된다.
+    targets = list(dict.fromkeys([OWNER_EMAIL] + bcc_all)) if total > 0 else [ERROR_EMAIL]
 
     # Operational review details remain in the owner copy only.
     from negative_mail import render_email

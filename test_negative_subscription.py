@@ -18,7 +18,7 @@ from test_negative_verification import fixture, MemoryQueue
 
 
 class ProductionRegression(unittest.TestCase):
-    def test_distinct_sender_gets_clean_copy_and_fixed_owner_gets_diagnostics(self):
+    def test_smtp_sender_is_not_implicitly_copied_and_owner_gets_diagnostics(self):
         from email import message_from_string
         self.job['input']['collection']={'coverage':[{'status':'cookie_required'}]}
         self.rehash()
@@ -27,7 +27,7 @@ class ProductionRegression(unittest.TestCase):
                                    'NOTIFY_EMAIL':'exec@example.invalid','EMAIL_CC':''}):
             bot.consume(self.queue,self.job['job_id'])
         self.assertEqual([call.args[1] for call in self.server.sendmail.call_args_list],
-                         [[bot.OWNER_EMAIL],['sender@example.invalid'],['exec@example.invalid']])
+                         [[bot.OWNER_EMAIL],['exec@example.invalid']])
         self.server.login.assert_called_with('sender@example.invalid','offline')
         for call in self.server.sendmail.call_args_list:
             self.assertEqual(call.args[0],'sender@example.invalid')
@@ -35,6 +35,26 @@ class ProductionRegression(unittest.TestCase):
             self.assertEqual(mail['To'],call.args[1][0])
             body=mail.get_payload(0).get_payload(decode=True).decode('utf-8')
             self.assertEqual('NAVER_COOKIES_JSON' in body,call.args[1]==[bot.OWNER_EMAIL])
+
+    def test_group_report_does_not_copy_gmail_sender_and_ack_still_completes(self):
+        group='report@example.googlegroups.com'
+        with patch.dict(os.environ,{'GMAIL_USER':bot.ERROR_EMAIL,
+                                   'NOTIFY_EMAIL':group,'EMAIL_CC':group}):
+            bot.consume(self.queue,self.job['job_id'])
+        self.assertEqual([call.args[1] for call in self.server.sendmail.call_args_list],
+                         [[bot.OWNER_EMAIL],[group]])
+        state=self.queue.get(self.queue.path)[0]
+        self.assertEqual(state['smtp_accepted'],2)
+        self.assertEqual(list(state['receipts'].values()),['accepted']*2)
+        self.remote_history=self.path.read_bytes()
+        bot.ack(self.queue,self.job['job_id'])
+        self.assertEqual(self.queue.get(self.queue.path)[0]['status'],'completed')
+
+    def test_explicit_sender_recipient_is_preserved(self):
+        with patch.dict(os.environ,{'GMAIL_USER':bot.ERROR_EMAIL,
+                                   'NOTIFY_EMAIL':bot.ERROR_EMAIL,'EMAIL_CC':''}):
+            self.assertEqual(bot.recipients(1),
+                             (bot.ERROR_EMAIL,[bot.OWNER_EMAIL,bot.ERROR_EMAIL]))
 
     def test_status_only_never_goes_to_distinct_sender_or_executives(self):
         with patch.dict(os.environ,{'GMAIL_USER':'sender@example.invalid'}):
@@ -158,6 +178,8 @@ class ProductionRegression(unittest.TestCase):
               'source':'blog','cafe_name':'블로그'}
         unresolved={'title':'검토 대상','url':'https://example.invalid/review'}
         namespace['send_alert_batch']([post],2,2,[unresolved])
+        self.assertEqual([call.args[1] for call in self.server.sendmail.call_args_list],
+                         [[bot.OWNER_EMAIL],['ops@example.invalid']])
         for call in self.server.sendmail.call_args_list:
             mail=message_from_string(call.args[2])
             body=mail.get_payload(0).get_payload(decode=True).decode('utf-8')

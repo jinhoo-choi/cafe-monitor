@@ -93,7 +93,8 @@ def recipients(negative_count):
     cc = [a.strip() for a in os.environ.get('EMAIL_CC','').split(',') if a.strip()]
     if not sender or not notify or not os.environ.get('GMAIL_APP_PW'):
         raise RuntimeError('기존 SMTP 수신자·인증 설정 누락')
-    targets = list(dict.fromkeys([OWNER_EMAIL]+[sender]+notify+cc)) if negative_count else [ERROR_EMAIL]
+    # SMTP 로그인 주소는 수신자가 아니다. 그룹스 회원에게 개인 사본을 중복 발송하지 않는다.
+    targets = list(dict.fromkeys([OWNER_EMAIL]+notify+cc)) if negative_count else [ERROR_EMAIL]
     if any('\n' in a or '\r' in a or '@' not in a for a in targets):
         raise ValueError('SMTP 수신자 형식 오류')
     return sender, targets
