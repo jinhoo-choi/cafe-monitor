@@ -508,6 +508,173 @@ class ProductionRegression(unittest.TestCase):
         self.smtp.assert_not_called()
 
 
+
+class QueueWriteConflictRegression(unittest.TestCase):
+    def queue(self):
+        from negative_queue import Queue
+        return Queue.__new__(Queue)
+
+    def test_unrelated_branch_conflict_retries_only_unchanged_target(self):
+        from negative_queue import QueueHTTPError
+        q=self.queue()
+        q.get=MagicMock(return_value=({'receipts':{'r':'planned'}},'old-blob'))
+        q.request=MagicMock(side_effect=[QueueHTTPError('PUT',409,'REQ:1'),{'content':{'sha':'new-blob'}}])
+        value={'receipts':{'r':'sending'}}
+        q.put('jobs/job.json',value,'old-blob')
+        self.assertEqual(q.request.call_count,2)
+        self.assertEqual(q.request.call_args_list[0],q.request.call_args_list[1])
+        q.get.assert_called_once_with('jobs/job.json')
+
+    def test_changed_target_even_identical_value_never_retries(self):
+        from negative_queue import QueueHTTPError
+        q=self.queue();value={'receipts':{'r':'sending'}}
+        q.get=MagicMock(return_value=(value,'other-blob'))
+        q.request=MagicMock(side_effect=QueueHTTPError('PUT',409,'REQ:2'))
+        with self.assertRaises(QueueHTTPError):q.put('jobs/job.json',value,'old-blob')
+        self.assertEqual(q.request.call_count,1)
+
+    def test_second_conflict_and_nonconflict_errors_are_not_retried(self):
+        from negative_queue import QueueHTTPError
+        for status in [409,422,403]:
+            q=self.queue();q.get=MagicMock(return_value=({},'old-blob'))
+            q.request=MagicMock(side_effect=QueueHTTPError('PUT',status,'REQ:3'))
+            with self.assertRaises(QueueHTTPError):q.put('jobs/job.json',{},'old-blob')
+            self.assertEqual(q.request.call_count,2 if status==409 else 1)
+        q=self.queue();q.request=MagicMock(side_effect=RuntimeError('network unknown'))
+        with self.assertRaises(RuntimeError):q.put('jobs/job.json',{},'old-blob')
+        self.assertEqual(q.request.call_count,1)
+
+    def test_conflicting_create_requires_path_still_absent(self):
+        from negative_queue import QueueHTTPError
+        for current,sha,retries in [(None,None,2),({},'existing',1)]:
+            q=self.queue();q.get=MagicMock(return_value=(current,sha))
+            q.request=MagicMock(side_effect=[QueueHTTPError('PUT',409,'REQ:4'),{}])
+            if retries==2:q.put('checks/new.json',{})
+            else:
+                with self.assertRaises(QueueHTTPError):q.put('checks/new.json',{})
+            self.assertEqual(q.request.call_count,retries)
+
+    def test_http_error_preserves_only_status_method_and_request_id(self):
+        import urllib.error
+        from negative_queue import QueueHTTPError
+        q=self.queue();q.token='private-test-token'
+        error=urllib.error.HTTPError('https://api.github.com/private',409,'conflict',
+                                    {'X-GitHub-Request-Id':'ABCD:1234'},None)
+        with patch('negative_queue.urllib.request.urlopen',side_effect=error):
+            with self.assertRaises(QueueHTTPError) as caught:q.request('/contents/test','PUT',{})
+        self.assertEqual((caught.exception.method,caught.exception.status,caught.exception.request_id),
+                         ('PUT',409,'ABCD:1234'))
+        self.assertNotIn('private-test-token',str(caught.exception))
+
+
+class ConsumeFailureEvidenceRegression(unittest.TestCase):
+    # Reuse the existing all-mocked SMTP/private-queue fixture only.
+    setUp = ProductionRegression.setUp
+    rehash = ProductionRegression.rehash
+    reload_queue = ProductionRegression.reload_queue
+    def test_receipt_write_failure_keeps_planned_and_private_detail(self):
+        from negative_queue import QueueHTTPError
+        original=self.queue.put
+        def put(path,value,sha=None):
+            if path==self.queue.path and 'sending' in value.get('receipts',{}).values():
+                raise QueueHTTPError('PUT',409,'REQ:RECEIPT')
+            return original(path,value,sha)
+        self.queue.put=put
+        before=self.path.read_bytes()
+        with self.assertRaises(QueueHTTPError):bot.consume(self.queue,self.job['job_id'])
+        state=self.queue.get(self.queue.path)[0]
+        self.assertEqual(state['status'],'uncertain')
+        self.assertEqual(list(state['receipts'].values()),['planned']*3)
+        self.server.sendmail.assert_not_called()
+        self.assertEqual(self.path.read_bytes(),before)
+        failures=[v for p,v in self.queue.files.items() if p.startswith('failures/')]
+        self.assertEqual(len(failures),1)
+        event=failures[0]
+        self.assertEqual(event['stage'],'receipt_sending')
+        self.assertEqual(event['error']['http_status'],409)
+        self.assertEqual(event['error']['request_id'],'REQ:RECEIPT')
+        self.assertEqual(list(event['receipts'].values()),['planned']*3)
+        self.assertNotIn('input',event)
+        with self.assertRaisesRegex(RuntimeError,'잠금'):bot.consume(self.queue,self.job['job_id'])
+        self.server.sendmail.assert_not_called()
+
+    def test_smtp_uncertainty_is_not_retried_and_sensitive_error_is_redacted(self):
+        self.server.sendmail.side_effect=ConnectionResetError(
+            'unknown after DATA secret-value exec@example.invalid Authorization: Bearer hidden')
+        with patch.dict(os.environ,{'NEGATIVE_QUEUE_TOKEN':'secret-value'}):
+            with self.assertRaises(ConnectionResetError):bot.consume(self.queue,self.job['job_id'])
+        failures=[v for p,v in self.queue.files.items() if p.startswith('failures/')]
+        text=json.dumps(failures)
+        for forbidden in ['secret-value','exec@example.invalid','hidden']:
+            self.assertNotIn(forbidden,text)
+        self.assertEqual(failures[0]['stage'],'smtp_send')
+        self.assertEqual(self.queue.get(self.queue.path)[0]['status'],'uncertain')
+        self.server.sendmail.assert_called_once()
+
+    def test_failure_record_error_preserves_primary_and_lock(self):
+        original=self.queue.put
+        def put(path,value,sha=None):
+            if path.startswith('failures/'):raise RuntimeError('audit unavailable')
+            return original(path,value,sha)
+        self.queue.put=put;self.server.sendmail.side_effect=ConnectionResetError('after DATA')
+        from contextlib import redirect_stderr
+        output=StringIO()
+        with redirect_stderr(output),self.assertRaises(ConnectionResetError):
+            bot.consume(self.queue,self.job['job_id'])
+        self.assertIn('비공개 오류 기록 저장 실패',output.getvalue())
+        self.assertEqual(self.queue.get(self.queue.path)[0]['status'],'uncertain')
+        self.server.sendmail.assert_called_once()
+
+
+    def test_unrelated_commit_before_receipt_write_recovers_without_smtp_retry(self):
+        import base64,urllib.parse
+        from negative_queue import Queue,QueueHTTPError,PREFIX
+        original=self.queue.put;adapter=Queue.__new__(Queue);adapter.get=self.queue.get
+        conflicts=[]
+        def request(suffix,method,data):
+            path=urllib.parse.unquote(suffix.split('/contents/'+PREFIX+'/')[1])
+            value=json.loads(base64.b64decode(data['content']))
+            if path==self.queue.path and 'sending' in value.get('receipts',{}).values() and not conflicts:
+                conflicts.append(path);raise QueueHTTPError('PUT',409,'REQ:BRANCH')
+            original(path,value,data.get('sha'));return {}
+        adapter.request=request
+        self.queue.put=lambda path,value,sha=None:Queue.put(adapter,path,value,sha)
+        self.assertTrue(bot.consume(self.queue,self.job['job_id']))
+        self.assertEqual(len(conflicts),1)
+        self.assertEqual(self.server.sendmail.call_count,3)
+        self.assertEqual(list(self.queue.get(self.queue.path)[0]['receipts'].values()),['accepted']*3)
+
+    def test_accepted_receipt_write_failure_keeps_ambiguous_lock_and_detail(self):
+        original=self.queue.put
+        def put(path,value,sha=None):
+            if path==self.queue.path and 'accepted' in value.get('receipts',{}).values():
+                raise RuntimeError('receipt persistence unavailable')
+            return original(path,value,sha)
+        self.queue.put=put
+        with self.assertRaises(RuntimeError):bot.consume(self.queue,self.job['job_id'])
+        state=self.queue.get(self.queue.path)[0]
+        self.assertEqual(state['status'],'uncertain')
+        self.assertIn('sending',state['receipts'].values())
+        event=next(v for p,v in self.queue.files.items() if p.startswith('failures/'))
+        self.assertEqual(event['stage'],'receipt_accepted')
+        with self.assertRaisesRegex(RuntimeError,'잠금'):bot.consume(self.queue,self.job['job_id'])
+        self.server.sendmail.assert_called_once()
+        self.assertEqual(self.path.read_bytes(),self.remote_history)
+
+    def test_cleanup_error_is_separate_and_never_replaces_original(self):
+        original=self.queue.put
+        def put(path,value,sha=None):
+            if path==self.queue.path and value.get('status')=='uncertain':
+                raise RuntimeError('cleanup unavailable')
+            return original(path,value,sha)
+        self.queue.put=put;self.server.sendmail.side_effect=ConnectionResetError('after DATA')
+        with self.assertRaises(ConnectionResetError):bot.consume(self.queue,self.job['job_id'])
+        event=next(v for p,v in self.queue.files.items() if p.startswith('failures/'))
+        self.assertEqual(event['error']['error_type'],'ConnectionResetError')
+        self.assertEqual(event['cleanup_error']['error_type'],'RuntimeError')
+        self.assertEqual(self.queue.get(self.queue.path)[0]['status'],'sending')
+        self.server.sendmail.assert_called_once()
+
 if __name__=='__main__':unittest.main()
 
 
