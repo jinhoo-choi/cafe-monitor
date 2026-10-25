@@ -2,6 +2,7 @@
 from notification_owner import OWNER_EMAIL, ERROR_EMAIL
 
 import base64
+from email import message_from_string
 from datetime import datetime, timedelta
 from email.header import Header
 from email.mime.multipart import MIMEMultipart
@@ -15,6 +16,7 @@ from pathlib import Path
 import smtplib
 import sys
 import tempfile
+import traceback
 import uuid
 
 from negative_queue import BOT_ID, JOB_ID, POLICY, PREFIX, REPOSITORY, Queue, digest, now
@@ -70,10 +72,25 @@ def outstanding(queue):
             queue.put('jobs/'+job_id+'.json',job,sha)
             print('미발송 만료 회차 정리; API0/재발송0')
             continue
-        raise RuntimeError('미종결 운영 회차 존재 — 새 수집·재발송 금지')
+        error = RuntimeError('미종결 운영 회차 존재 — 새 수집·재발송 금지')
+        error.blocking_job = {'job_id': job_id, 'status': job.get('status'),
+                              'blob_sha': sha, 'expires_at': job.get('expires_at')}
+        raise error
 
 
 def collect(queue):
+    stage = 'settings'
+    stages = []
+    job_id = 'negative-production-'+os.environ.get('GITHUB_RUN_ID', now().strftime('%Y%m%dT%H%M%S'))
+    try:
+        return collect_checked(queue, lambda value: stages.append(value))
+    except Exception as error:
+        record_consume_failure(queue, job_id, stages[-1] if stages else stage, error,
+                               operation='collect')
+        raise
+
+
+def collect_checked(queue, checkpoint):
     value = settings()
     if value['engine'] == 'paused':
         print('부정여론 구독 일시정지; 쓰기0/발송0/API0')
@@ -83,9 +100,13 @@ def collect(queue):
     if os.environ.get('DRY_RUN') == '1':
         print('DRY_RUN 구독 운영 쓰기0/발송0/API0')
         return
+    checkpoint('queue_preflight')
     queue.preflight()
+    checkpoint('live_settings')
     settings(queue,live=True)
+    checkpoint('outstanding')
     outstanding(queue)
+    checkpoint('source_collection')
     common.collect(queue,production=True)
 
 
@@ -139,14 +160,24 @@ def failure_detail(error):
     return detail
 
 
-def record_consume_failure(queue, job_id, stage, error, cleanup_error=None):
+def record_consume_failure(queue, job_id, stage, error, cleanup_error=None,
+                           operation='consume', smtp_observations=None):
     # This is evidence only: never change receipts, unlock, retry SMTP or ACK.
     try:
+        error._negative_evidence_attempted = True
         job, sha = queue.get('jobs/'+job_id+'.json')
-        evidence = {'schema_version': 1, 'job_id': job_id, 'operation': 'consume',
+        evidence = {'schema_version': 1, 'job_id': job_id, 'operation': operation,
                     'at': now().isoformat(), 'stage': stage, 'error': failure_detail(error),
                     'job_blob_sha': sha, 'job_status': (job or {}).get('status'),
-                    'receipts': (job or {}).get('receipts', {}), 'paid_ai_calls': 0}
+                    'receipts': (job or {}).get('receipts', {}), 'paid_ai_calls': 0,
+                    'github_run_id': os.environ.get('GITHUB_RUN_ID', ''),
+                    'github_run_attempt': os.environ.get('GITHUB_RUN_ATTEMPT', ''),
+                    'stack': [{'file': Path(f.filename).name, 'function': f.name, 'line': f.lineno}
+                              for f in traceback.extract_tb(error.__traceback__)]}
+        if getattr(error, 'blocking_job', None):
+            evidence['blocking_job'] = error.blocking_job
+        if smtp_observations:
+            evidence['smtp_observations'] = smtp_observations
         if cleanup_error:
             evidence['cleanup_error'] = failure_detail(cleanup_error)
         queue.put('failures/'+job_id+'/'+str(uuid.uuid4())+'.json', evidence)
@@ -184,6 +215,15 @@ def write_history(state):
 
 
 def consume(queue, job_id):
+    try:
+        return consume_checked(queue, job_id)
+    except Exception as error:
+        if not getattr(error, '_negative_evidence_attempted', False):
+            record_consume_failure(queue, job_id, 'preflight_or_render', error)
+        raise
+
+
+def consume_checked(queue, job_id):
     if not JOB_ID.fullmatch(job_id):
         raise ValueError('운영 회차 ID 오류')
     value = settings()
@@ -230,6 +270,7 @@ def consume(queue, job_id):
              'retry_next_collection':True})):
         queue.put(path,value,queue.get(path)[1])
     server = None
+    smtp_observations = {}
     stage = 'smtp_connect'
     try:
         server = smtplib.SMTP_SSL('smtp.gmail.com',465,timeout=20)
@@ -257,19 +298,35 @@ def consume(queue, job_id):
         for address,key in zip(targets,keys):
             stage = 'recipient_settings'
             settings(queue,live=True)
+            payload = message(subject,body if not selected or address == OWNER_EMAIL else executive_body,sender,address)
+            message_id = message_from_string(payload)['Message-ID']
+            def submitting(row):
+                row['receipts'][key] = 'sending'
+                row.setdefault('delivery_evidence', {})[key] = {
+                    'message_id': message_id, 'submission': 'may_have_started',
+                    'reserved_at': now().isoformat()}
             stage = 'receipt_sending'
-            change(queue,job_id,lambda row:row['receipts'].update({key:'sending'}))
+            change(queue,job_id,submitting)
             try:
                 stage = 'smtp_send'
-                refused = server.sendmail(sender,[address],message(subject,body if not selected or address == OWNER_EMAIL else executive_body,sender,address))
-            except smtplib.SMTPRecipientsRefused:
+                refused = server.sendmail(sender,[address],payload)
+            except smtplib.SMTPRecipientsRefused as error:
+                smtp_observations[key] = {'message_id': message_id, 'submission': 'rejected',
+                                          'smtp_codes': [v[0] for v in error.recipients.values()]}
                 change(queue,job_id,lambda row:row['receipts'].update({key:'rejected'}))
                 raise RuntimeError('운영 수신자 SMTP 거부') from None
             if refused:
+                smtp_observations[key] = {'message_id': message_id, 'submission': 'rejected',
+                                          'smtp_codes': [v[0] for v in refused.values()]}
                 change(queue,job_id,lambda row:row['receipts'].update({key:'rejected'}))
                 raise RuntimeError('운영 수신자 SMTP 거부')
+            smtp_observations[key] = {'message_id': message_id, 'submission': 'accepted',
+                                      'observed_at': now().isoformat()}
+            def accepted(row):
+                row['receipts'][key] = 'accepted'
+                row['delivery_evidence'][key].update(smtp_observations[key])
             stage = 'receipt_accepted'
-            change(queue,job_id,lambda row:row['receipts'].update({key:'accepted'}))
+            change(queue,job_id,accepted)
         def delivered(row):
             if not row['receipts'] or any(v!='accepted' for v in row['receipts'].values()):
                 raise RuntimeError('수신자 접수 미완료')
@@ -279,23 +336,39 @@ def consume(queue, job_id):
         change(queue,job_id,delivered)
     except Exception as error:
         cleanup_error = mark_uncertain(queue,job_id)
-        record_consume_failure(queue,job_id,stage,error,cleanup_error)
+        record_consume_failure(queue,job_id,stage,error,cleanup_error,
+                               smtp_observations=smtp_observations)
         raise
     finally:
         if server:
             try: server.close()
             except Exception: pass
-    if common.seen_snapshot()[1] != state_hash:
-        raise RuntimeError('발송 후 이력 충돌 — 접수 회차 유지, 재발송 금지')
-    write_history(expected)
-    if common.seen_snapshot()[1] != expected_hash:
-        raise RuntimeError('이력 저장 검증 실패 — 재발송 금지')
+    try:
+        stage = 'history_before_write'
+        if common.seen_snapshot()[1] != state_hash:
+            raise RuntimeError('발송 후 이력 충돌 — 접수 회차 유지, 재발송 금지')
+        stage = 'history_write'
+        write_history(expected)
+        stage = 'history_after_write'
+        if common.seen_snapshot()[1] != expected_hash:
+            raise RuntimeError('이력 저장 검증 실패 — 재발송 금지')
+    except Exception as error:
+        record_consume_failure(queue,job_id,stage,error,smtp_observations=smtp_observations)
+        raise
     print(json.dumps({'job_id':job_id,'status':'delivery_complete','smtp_accepted':len(targets),
                       'paid_ai_calls':0,'history_ack_pending':True}))
     return True
 
 
 def ack(queue, job_id):
+    try:
+        return ack_checked(queue, job_id)
+    except Exception as error:
+        record_consume_failure(queue,job_id,'history_ack',error,operation='ack')
+        raise
+
+
+def ack_checked(queue, job_id):
     if not JOB_ID.fullmatch(job_id):
         raise ValueError('ACK 회차 ID 오류')
     job, _ = queue.get('jobs/'+job_id+'.json')
