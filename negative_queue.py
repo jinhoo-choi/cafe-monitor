@@ -26,6 +26,13 @@ def digest(value):
                                      separators=(',', ':')).encode()).hexdigest()
 
 
+class QueueHTTPError(RuntimeError):
+    def __init__(self, method, status, request_id=None):
+        super().__init__(f'비공개 큐 {method} HTTP {status}')
+        self.method, self.status = method, status
+        self.request_id = request_id if request_id and re.fullmatch(r'[A-Za-z0-9:-]+', request_id) else None
+
+
 class Queue:
     def __init__(self):
         self.token = os.environ.get('NEGATIVE_QUEUE_TOKEN', '')
@@ -51,7 +58,8 @@ class Queue:
                 if error.code in {429, 500, 502, 503, 504} and attempt+1 < attempts:
                     time.sleep(attempt+1)
                     continue
-                raise RuntimeError(f'비공개 큐 {method} HTTP {error.code}') from None
+                raise QueueHTTPError(method, error.code,
+                                     error.headers.get('X-GitHub-Request-Id') if error.headers else None) from None
             except urllib.error.URLError:
                 if attempt+1 < attempts:
                     time.sleep(attempt+1)
@@ -90,7 +98,18 @@ class Queue:
                 'content': base64.b64encode(json.dumps(value, ensure_ascii=False, indent=2).encode()).decode()}
         if sha:
             body['sha'] = sha
-        return self.request('/contents/' + PREFIX + '/' + urllib.parse.quote(path, safe='/'), 'PUT', body)
+        for attempt in range(2):
+            try:
+                return self.request('/contents/' + PREFIX + '/' + urllib.parse.quote(path, safe='/'), 'PUT', body)
+            except QueueHTTPError as error:
+                if error.status != 409 or attempt:
+                    raise
+                # A different file can advance main while Contents API commits.
+                # Retry this write once only if its exact CAS target is unchanged.
+                # Even an identical value at a new SHA belongs to another writer.
+                current, current_sha = self.get(path)
+                if current_sha != sha or (sha is None and current is not None):
+                    raise
 
 
 def connection(queue):

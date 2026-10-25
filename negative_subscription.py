@@ -10,10 +10,12 @@ from email.utils import formataddr, formatdate, make_msgid
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import smtplib
 import sys
 import tempfile
+import uuid
 
 from negative_queue import BOT_ID, JOB_ID, POLICY, PREFIX, REPOSITORY, Queue, digest, now
 import negative_verification as common
@@ -117,9 +119,39 @@ def mark_uncertain(queue, job_id):
             if job.get('status') == 'sending':
                 job.update(status='uncertain',uncertain_at=now().isoformat())
         change(queue,job_id,edit)
-    except Exception:
+    except Exception as error:
         # sending 선기록이 남으면 이후 자동 재발송·만료 정리가 차단된다.
-        pass
+        return error
+
+
+def failure_detail(error):
+    text = str(error)
+    for name in ('NEGATIVE_QUEUE_TOKEN', 'GMAIL_APP_PW', 'NAVER_COOKIES_JSON', 'CLAUDE_API_KEY'):
+        secret = os.environ.get(name, '')
+        if secret:
+            text = text.replace(secret, '[redacted]')
+    text = re.sub(r'(?i)(authorization|cookie|token|password|secret|api[_-]?key)\s*[:=][^\r\n]*', r'\1: [redacted]', text)
+    text = re.sub(r'[\w.+-]+@[\w.-]+', '[redacted-address]', text)
+    detail = {'error_type': type(error).__name__, 'message': text}
+    if hasattr(error, 'status') and hasattr(error, 'method'):
+        detail.update(http_status=error.status, http_method=error.method,
+                      request_id=error.request_id)
+    return detail
+
+
+def record_consume_failure(queue, job_id, stage, error, cleanup_error=None):
+    # This is evidence only: never change receipts, unlock, retry SMTP or ACK.
+    try:
+        job, sha = queue.get('jobs/'+job_id+'.json')
+        evidence = {'schema_version': 1, 'job_id': job_id, 'operation': 'consume',
+                    'at': now().isoformat(), 'stage': stage, 'error': failure_detail(error),
+                    'job_blob_sha': sha, 'job_status': (job or {}).get('status'),
+                    'receipts': (job or {}).get('receipts', {}), 'paid_ai_calls': 0}
+        if cleanup_error:
+            evidence['cleanup_error'] = failure_detail(cleanup_error)
+        queue.put('failures/'+job_id+'/'+str(uuid.uuid4())+'.json', evidence)
+    except Exception as audit_error:
+        print('비공개 오류 기록 저장 실패: '+type(audit_error).__name__, file=sys.stderr)
 
 
 def history_bytes(state):
@@ -198,13 +230,18 @@ def consume(queue, job_id):
              'retry_next_collection':True})):
         queue.put(path,value,queue.get(path)[1])
     server = None
+    stage = 'smtp_connect'
     try:
         server = smtplib.SMTP_SSL('smtp.gmail.com',465,timeout=20)
+        stage = 'smtp_login'
         server.login(sender,os.environ['GMAIL_APP_PW'])
+        stage = 'pre_send_settings'
         settings(queue,live=True)
+        stage = 'pre_send_job_read'
         latest, sha = queue.get('jobs/'+job_id+'.json')
         if latest.get('status') != 'pending' or latest.get('receipts') or latest['input_hash'] != job['input_hash']:
             raise RuntimeError('발송 직전 회차 상태 변경')
+        stage = 'pre_send_validation'
         common.validate(latest,result,allow_production=True)
         if common.seen_snapshot()[1] != state_hash:
             raise RuntimeError('발송 직전 운영 이력 변경')
@@ -212,14 +249,18 @@ def consume(queue, job_id):
         latest.update(status='sending',sending_at=now().isoformat(),receipts={key:'planned' for key in keys},
                       recipient_fingerprint=digest(keys),processed_ids=processed,seen_before_hash=state_hash,
                       expected_seen_after_hash=expected_hash,selected_groups=len(selected),deferred_groups=len(deferred))
+        stage = 'job_reserve'
         queue.put('jobs/'+job_id+'.json',latest,sha)
         subject = '[부정여론 탐지] '+now().astimezone(common.KST).strftime('%m월 %d일 %H시 기준')
         if not selected:
             subject += ' | 확인필요' if any(p['verdict']=='needs_review' for p in posts.values()) else ' | 탐지 없음'
         for address,key in zip(targets,keys):
+            stage = 'recipient_settings'
             settings(queue,live=True)
+            stage = 'receipt_sending'
             change(queue,job_id,lambda row:row['receipts'].update({key:'sending'}))
             try:
+                stage = 'smtp_send'
                 refused = server.sendmail(sender,[address],message(subject,body if not selected or address == OWNER_EMAIL else executive_body,sender,address))
             except smtplib.SMTPRecipientsRefused:
                 change(queue,job_id,lambda row:row['receipts'].update({key:'rejected'}))
@@ -227,15 +268,18 @@ def consume(queue, job_id):
             if refused:
                 change(queue,job_id,lambda row:row['receipts'].update({key:'rejected'}))
                 raise RuntimeError('운영 수신자 SMTP 거부')
+            stage = 'receipt_accepted'
             change(queue,job_id,lambda row:row['receipts'].update({key:'accepted'}))
         def delivered(row):
             if not row['receipts'] or any(v!='accepted' for v in row['receipts'].values()):
                 raise RuntimeError('수신자 접수 미완료')
             row.update(status='delivery_complete',delivery_at=now().isoformat(),paid_ai_calls=0,
                        smtp_accepted=len(targets),self_test=False)
+        stage = 'delivery_complete'
         change(queue,job_id,delivered)
-    except Exception:
-        mark_uncertain(queue,job_id)
+    except Exception as error:
+        cleanup_error = mark_uncertain(queue,job_id)
+        record_consume_failure(queue,job_id,stage,error,cleanup_error)
         raise
     finally:
         if server:
