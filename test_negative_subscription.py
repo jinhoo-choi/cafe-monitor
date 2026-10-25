@@ -675,6 +675,104 @@ class ConsumeFailureEvidenceRegression(unittest.TestCase):
         self.assertEqual(self.queue.get(self.queue.path)[0]['status'],'sending')
         self.server.sendmail.assert_called_once()
 
+
+class RecoveryEvidenceRegression(unittest.TestCase):
+    setUp = ProductionRegression.setUp
+    rehash = ProductionRegression.rehash
+    reload_queue = ProductionRegression.reload_queue
+
+    def test_expired_uncertain_collect_keeps_lock_and_records_exact_blocker(self):
+        self.job.update(status='uncertain',expires_at=(now()-timedelta(hours=1)).isoformat(),
+                        receipts={'recipient':'planned'})
+        self.reload_queue()
+        self.queue.files['index.json']={'bot_id':bot.BOT_ID,'jobs':[self.job['job_id']]}
+        with patch.object(common,'collect') as collect,self.assertRaisesRegex(RuntimeError,'미종결'):
+            bot.collect(self.queue)
+        collect.assert_not_called();self.smtp.assert_not_called()
+        self.assertEqual(self.queue.get(self.queue.path)[0]['status'],'uncertain')
+        e=next(v for p,v in self.queue.files.items() if p.startswith('failures/'))
+        self.assertEqual((e['operation'],e['stage']),('collect','outstanding'))
+        self.assertEqual(e['blocking_job']['job_id'],self.job['job_id'])
+        self.assertEqual(e['blocking_job']['status'],'uncertain')
+        self.assertIn('미종결',e['error']['message']);self.assertTrue(e['stack'])
+        self.assertNotIn('input',e)
+
+    def test_collection_source_failure_is_recorded_without_an_empty_success(self):
+        with patch.object(bot,'outstanding'),patch.object(common,'collect',side_effect=ValueError('source fetch failed')):
+            with self.assertRaisesRegex(ValueError,'source fetch failed'):bot.collect(self.queue)
+        e=next(v for p,v in self.queue.files.items() if p.startswith('failures/'))
+        self.assertEqual((e['operation'],e['stage']),('collect','source_collection'))
+        self.smtp.assert_not_called()
+
+    def test_message_ids_are_persisted_before_smtp_and_match_exact_payload(self):
+        from email import message_from_string
+        mids=[]
+        def send(sender,targets,payload):
+            key=__import__('hashlib').sha256(targets[0].encode()).hexdigest()
+            row=self.queue.get(self.queue.path)[0]
+            self.assertEqual(row['receipts'][key],'sending')
+            mid=message_from_string(payload)['Message-ID'];mids.append(mid)
+            self.assertEqual(row['delivery_evidence'][key]['message_id'],mid)
+            self.assertEqual(row['delivery_evidence'][key]['submission'],'may_have_started')
+            return {}
+        self.server.sendmail.side_effect=send
+        bot.consume(self.queue,self.job['job_id'])
+        row=self.queue.get(self.queue.path)[0]
+        self.assertEqual(len(set(mids)),3)
+        self.assertTrue(all(x['submission']=='accepted' for x in row['delivery_evidence'].values()))
+
+    def test_smtp_returned_accepted_is_preserved_when_receipt_put_fails(self):
+        original=self.queue.put
+        def put(path,value,sha=None):
+            if path==self.queue.path and 'accepted' in value.get('receipts',{}).values():
+                raise RuntimeError('receipt persist failed')
+            return original(path,value,sha)
+        self.queue.put=put
+        with self.assertRaisesRegex(RuntimeError,'receipt persist failed'):bot.consume(self.queue,self.job['job_id'])
+        e=next(v for p,v in self.queue.files.items() if p.startswith('failures/'))
+        observed=list(e['smtp_observations'].values())
+        self.assertEqual(len(observed),1);self.assertEqual(observed[0]['submission'],'accepted')
+        self.assertTrue(observed[0]['message_id'])
+        self.assertEqual(self.queue.get(self.queue.path)[0]['status'],'uncertain')
+        with self.assertRaisesRegex(RuntimeError,'잠금'):bot.consume(self.queue,self.job['job_id'])
+        self.server.sendmail.assert_called_once()
+
+    def test_history_failure_keeps_accepted_receipts_and_never_resends(self):
+        with patch.object(bot,'write_history',side_effect=OSError('disk unavailable')):
+            with self.assertRaises(OSError):bot.consume(self.queue,self.job['job_id'])
+        row=self.queue.get(self.queue.path)[0]
+        self.assertEqual(row['status'],'delivery_complete')
+        self.assertEqual(list(row['receipts'].values()),['accepted']*3)
+        e=next(v for p,v in self.queue.files.items() if p.startswith('failures/'))
+        self.assertEqual(e['stage'],'history_write')
+        self.assertEqual(len(e['smtp_observations']),3)
+        with self.assertRaisesRegex(RuntimeError,'잠금'):bot.consume(self.queue,self.job['job_id'])
+        self.assertEqual(self.server.sendmail.call_count,3)
+
+    def test_ack_failure_is_recorded_without_downgrading_delivery(self):
+        bot.consume(self.queue,self.job['job_id'])
+        with self.assertRaisesRegex(RuntimeError,'main 처리 이력 불일치'):bot.ack(self.queue,self.job['job_id'])
+        e=next(v for p,v in self.queue.files.items() if p.startswith('failures/'))
+        self.assertEqual((e['operation'],e['stage']),('ack','history_ack'))
+        self.assertEqual(self.queue.get(self.queue.path)[0]['status'],'delivery_complete')
+        self.assertEqual(self.server.sendmail.call_count,3)
+
+    def test_refusal_is_not_mislabeled_as_accepted_or_retried(self):
+        self.server.sendmail.side_effect=smtplib.SMTPRecipientsRefused({'hidden@example.invalid':(550,b'blocked')})
+        with self.assertRaisesRegex(RuntimeError,'SMTP 거부'):bot.consume(self.queue,self.job['job_id'])
+        e=next(v for p,v in self.queue.files.items() if p.startswith('failures/'))
+        o=next(iter(e['smtp_observations'].values()))
+        self.assertEqual((o['submission'],o['smtp_codes']),('rejected',[550]))
+        self.assertNotIn('hidden@example.invalid',json.dumps(e))
+        self.server.sendmail.assert_called_once()
+
+    def test_expired_pending_never_reaches_smtp(self):
+        self.job['expires_at']=(now()-timedelta(seconds=1)).isoformat();self.reload_queue()
+        with self.assertRaises(ValueError):bot.consume(self.queue,self.job['job_id'])
+        self.smtp.assert_not_called()
+        e=next(v for p,v in self.queue.files.items() if p.startswith('failures/'))
+        self.assertEqual(e['stage'],'preflight_or_render')
+
 if __name__=='__main__':unittest.main()
 
 
