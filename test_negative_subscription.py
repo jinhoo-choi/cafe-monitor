@@ -18,6 +18,91 @@ from test_negative_verification import fixture, MemoryQueue
 
 
 class ProductionRegression(unittest.TestCase):
+    def test_known_owner_group_removes_direct_company_copy_and_preserves_ack(self):
+        from email import message_from_string
+        group='risk_aigent@googlegroups.com'
+        self.job['input']['collection']={'coverage':[{'status':'cookie_required'}]}
+        self.rehash()
+        self.reload_queue()
+        with patch.dict(os.environ,{'GMAIL_USER':bot.ERROR_EMAIL,
+                                   'NOTIFY_EMAIL':group+','+bot.OWNER_EMAIL,
+                                   'EMAIL_CC':bot.OWNER_EMAIL+',exec@example.invalid,'+group}):
+            bot.consume(self.queue,self.job['job_id'])
+            self.assertEqual([c.args[1] for c in self.server.sendmail.call_args_list],
+                             [[group],['exec@example.invalid']])
+            for call in self.server.sendmail.call_args_list:
+                mail=message_from_string(call.args[2])
+                self.assertEqual(mail['To'],call.args[1][0])
+                self.assertIsNone(mail['Cc'])
+                self.assertIsNone(mail['Bcc'])
+                body=mail.get_payload(0).get_payload(decode=True).decode('utf-8')
+                self.assertIn('주문이 계속 실패',body)
+                self.assertNotIn('NAVER_COOKIES_JSON',body)
+            self.assertIn('NAVER_COOKIES_JSON',self.queue.get('previews/'+self.job['job_id']+'.json')[0]['html'])
+            state=self.queue.get(self.queue.path)[0]
+            import hashlib
+            self.assertNotIn(hashlib.sha256(bot.OWNER_EMAIL.encode()).hexdigest(),state['receipts'])
+            self.assertEqual(list(state['receipts'].values()),['accepted']*2)
+            self.remote_history=self.path.read_bytes()
+            bot.ack(self.queue,self.job['job_id'])
+            self.assertEqual(self.queue.get(self.queue.path)[0]['status'],'completed')
+            self.assertTrue(self.queue.get(self.queue.path)[0]['history_ack'])
+            self.assertFalse(bot.consume(self.queue,self.job['job_id']))
+            self.assertEqual(self.server.sendmail.call_count,2)
+
+    def test_known_group_in_cc_also_removes_case_variant_owner_copy(self):
+        group='RISK_AIGENT@GOOGLEGROUPS.COM'
+        with patch.dict(os.environ,{'NOTIFY_EMAIL':bot.OWNER_EMAIL.upper()+',exec@example.invalid',
+                                   'EMAIL_CC':group+','+bot.OWNER_EMAIL+',risk_aigent@googlegroups.com'}):
+            self.assertEqual(bot.recipients(1)[1],['exec@example.invalid',group.lower()])
+            self.assertEqual(bot.recipients(0)[1],[bot.ERROR_EMAIL])
+
+    def test_group_refusal_never_falls_back_to_direct_owner_or_marks_history(self):
+        group='risk_aigent@googlegroups.com'
+        self.server.sendmail.side_effect=smtplib.SMTPRecipientsRefused({group:(550,b'refused')})
+        before=self.path.read_bytes()
+        with patch.dict(os.environ,{'NOTIFY_EMAIL':group,'EMAIL_CC':bot.OWNER_EMAIL}):
+            with self.assertRaisesRegex(RuntimeError,'SMTP 거부'):
+                bot.consume(self.queue,self.job['job_id'])
+        self.assertEqual([c.args[1] for c in self.server.sendmail.call_args_list],[[group]])
+        state=self.queue.get(self.queue.path)[0]
+        self.assertEqual(state['status'],'uncertain')
+        self.assertEqual(list(state['receipts'].values()),['rejected'])
+        self.assertEqual(self.path.read_bytes(),before)
+
+    def test_legacy_known_group_has_one_report_and_status_still_uses_gmail(self):
+        import ast, html
+        from datetime import datetime
+        from email import message_from_string
+        import negative_mail
+        group='risk_aigent@googlegroups.com'
+        node=next(n for n in ast.parse(Path('monitor.py').read_text()).body
+                  if isinstance(n,ast.FunctionDef) and n.name=='send_alert_batch')
+        namespace=dict(vars(bot),DRY_RUN=False,API_STATS={},datetime=datetime,KST=common.KST,
+                       html=html,build_card=negative_mail.build_card,GMAIL_USER=bot.ERROR_EMAIL,
+                       GMAIL_APP_PW='offline',RECIPIENTS=[group.upper(),bot.OWNER_EMAIL],CC_RECIPIENTS=[bot.OWNER_EMAIL],
+                       log=lambda *args:None,_from_header=lambda:bot.ERROR_EMAIL,
+                       _addr_header=lambda value:value,_notify_send_failure=lambda *args:None)
+        exec(compile(ast.Module(body=[node],type_ignores=[]),'legacy-group-report','exec'),namespace)
+        post={'title':'한국투자증권 주문 오류','url':'https://example.invalid/finding',
+              'matched_kw':'한국투자증권','score':3,'summary':'주문 오류 신고','reply':'주문 내역 확인',
+              'source':'blog','cafe_name':'블로그'}
+        namespace['send_alert_batch']([post],1,1,[])
+        self.server.sendmail.assert_called_once()
+        call=self.server.sendmail.call_args
+        self.assertEqual(call.args[1],[group])
+        self.assertEqual(message_from_string(call.args[2])['To'],group)
+        self.server.sendmail.reset_mock()
+        self.server.sendmail.return_value={group:(550,b'refused')}
+        with self.assertRaisesRegex(RuntimeError,'SMTP 전원 거부'):
+            namespace['send_alert_batch']([post],1,1,[])
+        self.assertEqual(self.server.sendmail.call_args.args[1],[group])
+        self.server.sendmail.return_value={}
+        self.server.sendmail.reset_mock()
+        namespace['send_alert_batch']([],1,1,[{'title':'검토 대상','url':'https://example.invalid/review'}])
+        self.server.sendmail.assert_called_once()
+        self.assertEqual(self.server.sendmail.call_args.args[1],[bot.ERROR_EMAIL])
+
     def test_smtp_sender_is_not_implicitly_copied_and_owner_gets_diagnostics(self):
         from email import message_from_string
         self.job['input']['collection']={'coverage':[{'status':'cookie_required'}]}

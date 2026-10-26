@@ -1,5 +1,5 @@
 """구독 운영: 기존 수집·수신자 유지, SMTP 영수증→이력 push→private ack."""
-from notification_owner import OWNER_EMAIL, ERROR_EMAIL
+from notification_owner import OWNER_EMAIL, ERROR_EMAIL, report_recipients
 
 import base64
 from email import message_from_string
@@ -117,7 +117,7 @@ def recipients(negative_count):
     if not sender or not notify or not os.environ.get('GMAIL_APP_PW'):
         raise RuntimeError('기존 SMTP 수신자·인증 설정 누락')
     # SMTP 로그인 주소는 수신자가 아니다. 그룹스 회원에게 개인 사본을 중복 발송하지 않는다.
-    targets = list(dict.fromkeys([OWNER_EMAIL]+notify+cc)) if negative_count else [ERROR_EMAIL]
+    targets = report_recipients(notify, cc) if negative_count else [ERROR_EMAIL]
     if any('\n' in a or '\r' in a or '@' not in a for a in targets):
         raise ValueError('SMTP 수신자 형식 오류')
     return sender, targets

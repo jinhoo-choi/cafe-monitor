@@ -54,12 +54,12 @@ negative_subscription_config.json의 engine을 paused로 바꿔 새 분석·발�
 
 ## 임원용 본문과 운영자용 진단 분리
 
-운영 발송은 `111715@koreainvestment.com`을 명시적으로 승인된 운영자 주소로 사용한다.
-SMTP 로그인·발신 계정 `GMAIL_USER`는 운영자 수신 주소와 독립적이다. 같은 회차라도 운영자는
-수집 오류, 쿠키 상태, 본문 미수집·귀속 확인, 이월 안내가 포함된 전용 사본을 받고,
+SMTP 로그인·발신 계정 `GMAIL_USER`는 운영자 수신 주소와 독립적이다.
+일반 보고는 아래 그룹스 중복 사본 방지 규칙을 우선 적용한다. 그룹을 통한 수신이 없을 때
+운영자는 수집 오류, 쿠키 상태, 본문 미수집·귀속 확인, 이월 안내가 포함된 전용 사본을 받고,
 `NOTIFY_EMAIL`·`EMAIL_CC` 수신자는 확인된 부정 이슈 카드만 받는다. 주소별 개별
 SMTP envelope와 기존 접수·중복 방지 상태 관리는 유지한다. 확인된 이슈가 없으면
-기존대로 운영자에게만 상태 또는 확인필요 메일을 보내며 임원에게 정상 결과를
+개인 Gmail로만 상태 또는 확인필요 메일을 보내며 임원에게 정상 결과를
 지어내 보내지 않는다. 실제 고객의 주문 오류 등 이슈 원문·요약은 제거하지 않는다.
 
 회귀 검증: `python -m unittest -v test_negative_verification test_negative_subscription test_cookie_refresh test_cookie_provenance`
@@ -69,10 +69,14 @@ SMTP envelope와 기존 접수·중복 방지 상태 관리는 유지한다. 확
 
 input.policy_hash와 결과 policy_hash를 현재 negative_policy.json의 canonical JSON SHA-256과 대조한다. 수집 전후, 소비 및 각 수신자 제출 전에 main 정책을 재확인한다. 같은 policy_version 안의 내용 변경도 발송을 보류한다. 해시가 없는 legacy pending은 자동 소비하지 않는다. 이미 종결된 회차·영수증·처리 이력은 변경하거나 재전송하지 않는다.
 
-## 2026-10-25 SMTP 발신 계정 중복 사본 제거
+## 2026-10-25·27 일반 보고 중복 사본 제거
 
-그룹스 회원의 중복 수신을 막기 위해 구독·기존 발송 경로 모두 `GMAIL_USER`를
-일반 보고 수신자에 자동 추가하지 않는다. 운영자 진단 사본과 명시된
-`NOTIFY_EMAIL`·`EMAIL_CC` 수신자는 유지한다. 오류·쿠키·확인필요·탐지 없음 및
+구독·기존 발송 경로 모두 `GMAIL_USER`를 일반 보고 수신자에 자동 추가하지 않는다.
+2026-10-27 사용자 지시: `risk_aigent@googlegroups.com`이 `NOTIFY_EMAIL` 또는
+`EMAIL_CC`에 있으면 그룹 회원인 운영자의 `111715@koreainvestment.com` 직접 사본은
+자동 추가·명시 설정 여부와 관계없이 제외한다. 다른 그룹의 회원 여부는 추정하지 않으며,
+해당 그룹이 없으면 기존 운영자 경로를 유지한다. 나머지 명시 수신자는 보존한다.
+운영자 전용 진단 내용은 비공개 preview에 보존하고 그룹 보고에 섞지 않는다.
+오류·쿠키·확인필요·탐지 없음 및
 본인 검수는 기존 Gmail 전용 경로를 유지한다. 이미 접수된 회차를 재발송하지 않는다.
 
