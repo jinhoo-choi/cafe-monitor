@@ -6,7 +6,7 @@
 - 탐지 없음 / 오류 시 발신자 전용 상태 이메일 발송
 """
 
-from notification_owner import OWNER_EMAIL, ERROR_EMAIL
+from notification_owner import OWNER_EMAIL, ERROR_EMAIL, report_recipients
 
 import os
 import json
@@ -1380,7 +1380,10 @@ def send_alert_batch(alert_posts, crawled_count, keyword_count, unresolved_posts
         bcc_all = []
         kind = "발신자 전용 (확인필요 단독)"
     # SMTP 로그인 주소를 자동 수신자로 추가하면 그룹스 회원에게 중복 전달된다.
-    targets = list(dict.fromkeys([OWNER_EMAIL] + bcc_all)) if total > 0 else [ERROR_EMAIL]
+    targets = report_recipients(RECIPIENTS, CC_RECIPIENTS) if total > 0 else [ERROR_EMAIL]
+    # Removed owner copies are not intended delivery targets or failure criteria.
+    configured_targets = {addr.casefold() for addr in bcc_all}
+    bcc_all = [addr for addr in targets if addr.casefold() in configured_targets]
 
     # Operational review details remain in the owner copy only.
     from negative_mail import render_email
