@@ -58,6 +58,39 @@ class MemoryQueue:
 
 
 class VerificationRegression(unittest.TestCase):
+    def test_neutral_information_with_mild_regret_has_no_alert_group(self):
+        # Executor-reviewed synthetic contrast cases. This validates transport
+        # and policy regressions, not future LLM semantic accuracy.
+        cases=[
+            ('한국투자증권 은행 연계계좌는 CMA 가입이 제한됩니다. 연결 은행으로 이체하면 수수료가 면제될 수 있습니다. 제한은 아쉽지만 조건과 절약 경로를 알아봤습니다.',
+             'non_negative',0,'상품 조건과 절약 방법을 설명하는 정보 공유이며 가벼운 아쉬움만 있다.'),
+            ('한국투자증권 CMA와 다른 계좌 수수료를 비교했습니다. 가입 가능한 계좌와 면제 조건부터 확인하면 됩니다.',
+             'non_negative',0,'수수료 비교와 가입 조건 안내이며 실제 불만을 제기하지 않았다.'),
+            ('한국투자증권 이체 수수료가 계속 부담됩니다. 연계계좌의 CMA 제한을 개선해 줬으면 합니다. 혜택이 제한되는 것이 아쉽습니다.',
+             'negative',2,'차분한 말투지만 반복 비용 부담과 가입 제한 개선을 명시적으로 요구했다.'),
+            ('한국투자증권은 수수료 면제 대상이라고 안내했지만 실제로 수수료가 청구됐습니다. 청구 오류 여부를 확인해 주세요.',
+             'negative',4,'실제 수수료 청구와 안내 불일치를 주장해 금전 피해 여부를 확인해야 한다.')]
+        for body,verdict,score,reason in cases:
+            with self.subTest(verdict=verdict,reason=reason):
+                job,result=fixture()
+                source=job['input']['items'][0]
+                source.update(title='한국투자증권 계좌와 수수료 경험',body_excerpt=body,
+                              body_original_chars=len(body),body_excerpt_chars=len(body))
+                row=result['posts'][0]
+                row.update(verdict=verdict,score=score,reason=reason,urgency='normal',
+                           category='fees' if verdict=='negative' else 'neutral_other',
+                           summary=reason,internal_action='작성자의 실제 문제 제기와 정보 공유 맥락을 구분한다.',
+                           reply_draft='',evidence_quotes=[{'field':'body_excerpt','quote':body}])
+                if verdict=='non_negative': result['groups']=[]
+                job['input_hash']=result['input_hash']=queue_module.digest(job['input'])
+                bot.validate(job,result)
+                selected,_=bot.selected_groups(result)
+                self.assertEqual(bool(selected),verdict=='negative')
+        rules=json.loads(Path('negative_policy.json').read_text())
+        self.assertIn('가벼운 선호·아쉬움',rules['classification']['non_negative'])
+        self.assertIn('명시적 비판',rules['classification']['context_priority'])
+        self.assertEqual(rules['score']['threshold'],1)
+
     def setUp(self):
         self.job,self.result=fixture()
         self.queue=MemoryQueue(self.job,self.result)
