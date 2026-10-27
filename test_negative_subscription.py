@@ -416,6 +416,85 @@ class ProductionRegression(unittest.TestCase):
         self.assertEqual(self.server.sendmail.call_args.args[1],[bot.ERROR_EMAIL])
         self.assertIn(self.result['posts'][0]['post_id'],json.loads(self.path.read_text()))
 
+    def test_status_receipt_transition_survives_stale_main_read(self):
+        self.result['posts'][0].update(verdict='non_negative',score=0,urgency='watch',category='neutral_other')
+        self.result['groups']=[]
+        self.reload_queue()
+        real_get=self.queue.get
+        def stale_get(path):
+            row,sha=real_get(path)
+            if path==self.queue.path and row['status']=='sending' and set(row['receipts'].values())=={'accepted'}:
+                row['receipts']={k:'sending' for k in row['receipts']}
+                return row,str(int(sha)-1)
+            return row,sha
+        with patch.object(self.queue,'get',side_effect=stale_get):
+            self.assertTrue(bot.consume(self.queue,self.job['job_id']))
+        state=real_get(self.queue.path)[0]
+        self.assertEqual(state['status'],'delivery_complete')
+        self.assertEqual(list(state['receipts'].values()),['accepted'])
+        self.server.sendmail.assert_called_once()
+        self.assertEqual(self.server.sendmail.call_args.args[1],[bot.ERROR_EMAIL])
+        self.remote_history=self.path.read_bytes()
+        bot.ack(self.queue,self.job['job_id'])
+        self.assertEqual(real_get(self.queue.path)[0]['status'],'completed')
+        self.assertEqual(self.server.sendmail.call_count,1)
+
+    def test_concurrent_job_change_after_acceptance_is_never_overwritten(self):
+        self.result['posts'][0].update(verdict='non_negative',score=0,urgency='watch',category='neutral_other')
+        self.result['groups']=[]
+        self.reload_queue()
+        real_put=self.queue.put
+        def concurrent_put(path,value,sha=None):
+            response=real_put(path,value,sha)
+            if path==self.queue.path and value['status']=='sending' and set(value['receipts'].values())=={'accepted'}:
+                self.queue.files[path].update(status='uncertain',other_writer_hold=True)
+                self.queue.revisions[path]=str(int(self.queue.revisions[path])+1)
+            return response
+        with patch.object(self.queue,'put',side_effect=concurrent_put):
+            with self.assertRaisesRegex(RuntimeError,'CAS mismatch'):
+                bot.consume(self.queue,self.job['job_id'])
+        state=self.queue.get(self.queue.path)[0]
+        self.assertEqual(state['status'],'uncertain')
+        self.assertTrue(state['other_writer_hold'])
+        self.assertEqual(list(state['receipts'].values()),['accepted'])
+        self.assertEqual(self.path.read_bytes(),self.remote_history)
+        with self.assertRaisesRegex(RuntimeError,'잠금'):
+            bot.consume(self.queue,self.job['job_id'])
+        self.assertEqual(self.server.sendmail.call_count,1)
+
+    def test_exact_history_is_durable_before_smtp_and_can_ack_without_resend(self):
+        import hashlib
+        original_expiry=self.job['expires_at']
+        def accepted(sender,targets,payload):
+            state=self.queue.get(self.queue.path)[0]
+            raw=state['expected_seen_after_snapshot'].encode('utf-8')
+            self.assertEqual(hashlib.sha256(raw).hexdigest(),state['expected_seen_after_hash'])
+            self.assertEqual(state['expires_at'],original_expiry)
+            return {}
+        self.server.sendmail.side_effect=accepted
+        with patch.object(bot,'write_history',side_effect=OSError('offline history failure')):
+            with self.assertRaisesRegex(OSError,'offline history failure'):
+                bot.consume(self.queue,self.job['job_id'])
+        state=self.queue.get(self.queue.path)[0]
+        self.assertEqual(state['status'],'delivery_complete')
+        self.remote_history=state['expected_seen_after_snapshot'].encode('utf-8')
+        calls=self.server.sendmail.call_count
+        with patch.object(bot.smtplib,'SMTP_SSL',side_effect=AssertionError('ACK must not send')):
+            bot.ack(self.queue,self.job['job_id'])
+        self.assertEqual(self.queue.get(self.queue.path)[0]['status'],'completed')
+        self.assertEqual(self.server.sendmail.call_count,calls)
+
+    def test_missing_reservation_write_sha_stops_before_smtp(self):
+        real_put=self.queue.put
+        def missing_sha(path,value,sha=None):
+            response=real_put(path,value,sha)
+            return {} if path==self.queue.path and value.get('status')=='sending' else response
+        with patch.object(self.queue,'put',side_effect=missing_sha):
+            with self.assertRaisesRegex(RuntimeError,'쓰기 확인 SHA'):
+                bot.consume(self.queue,self.job['job_id'])
+        self.server.sendmail.assert_not_called()
+        self.assertEqual(self.path.read_bytes(),self.remote_history)
+
     def test_verified_or_historical_inputs_never_use_operating_recipients(self):
         for kind in ('verification','historical'):
             with self.subTest(kind=kind):
@@ -721,7 +800,7 @@ class ConsumeFailureEvidenceRegression(unittest.TestCase):
             value=json.loads(base64.b64decode(data['content']))
             if path==self.queue.path and 'sending' in value.get('receipts',{}).values() and not conflicts:
                 conflicts.append(path);raise QueueHTTPError('PUT',409,'REQ:BRANCH')
-            original(path,value,data.get('sha'));return {}
+            return original(path,value,data.get('sha'))
         adapter.request=request
         self.queue.put=lambda path,value,sha=None:Queue.put(adapter,path,value,sha)
         self.assertTrue(bot.consume(self.queue,self.job['job_id']))

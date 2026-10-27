@@ -55,6 +55,7 @@ class MemoryQueue:
         if sha!=self.revisions.get(path): raise RuntimeError('CAS mismatch')
         self.files[path]=copy.deepcopy(value)
         self.revisions[path]=str(int(self.revisions.get(path,'0'))+1)
+        return {'content':{'sha':self.revisions[path]}}
 
 
 class VerificationRegression(unittest.TestCase):
