@@ -2,6 +2,7 @@
 from notification_owner import OWNER_EMAIL, ERROR_EMAIL, report_recipients
 
 import base64
+import copy
 from email import message_from_string
 from datetime import datetime, timedelta
 from email.header import Header
@@ -42,14 +43,18 @@ def settings(queue=None, live=False):
     return value
 
 
-def change(queue, job_id, edit):
+def change(queue, job_id, edit, previous=None):
     path = 'jobs/'+job_id+'.json'
-    job, sha = queue.get(path)
+    job, sha = previous if previous is not None else queue.get(path)
     if not job:
         raise RuntimeError('구독 운영 회차 없음')
+    job = copy.deepcopy(job)
     edit(job)
-    queue.put(path, job, sha)
-    return job
+    response = queue.put(path, job, sha)
+    committed_sha = (response or {}).get('content', {}).get('sha')
+    if not isinstance(committed_sha, str) or not committed_sha:
+        raise RuntimeError('운영 상태 쓰기 확인 SHA 누락 — 재발송 금지')
+    return job, committed_sha
 
 
 def outstanding(queue):
@@ -134,12 +139,12 @@ def message(subject, body, sender, address):
     return result.as_string()
 
 
-def mark_uncertain(queue, job_id):
+def mark_uncertain(queue, job_id, previous=None):
     try:
         def edit(job):
             if job.get('status') == 'sending':
                 job.update(status='uncertain',uncertain_at=now().isoformat())
-        change(queue,job_id,edit)
+        change(queue,job_id,edit,previous=previous)
     except Exception as error:
         # sending 선기록이 남으면 이후 자동 재발송·만료 정리가 차단된다.
         return error
@@ -270,6 +275,7 @@ def consume_checked(queue, job_id):
              'retry_next_collection':True})):
         queue.put(path,value,queue.get(path)[1])
     server = None
+    current = None
     smtp_observations = {}
     stage = 'smtp_connect'
     try:
@@ -287,11 +293,16 @@ def consume_checked(queue, job_id):
         if common.seen_snapshot()[1] != state_hash:
             raise RuntimeError('발송 직전 운영 이력 변경')
         keys = [hashlib.sha256(a.encode()).hexdigest() for a in targets]
-        latest.update(status='sending',sending_at=now().isoformat(),receipts={key:'planned' for key in keys},
-                      recipient_fingerprint=digest(keys),processed_ids=processed,seen_before_hash=state_hash,
-                      expected_seen_after_hash=expected_hash,selected_groups=len(selected),deferred_groups=len(deferred))
+        def reserved(row):
+            row.update(status='sending',sending_at=now().isoformat(),receipts={key:'planned' for key in keys},
+                       recipient_fingerprint=digest(keys),processed_ids=processed,seen_before_hash=state_hash,
+                       expected_seen_after_hash=expected_hash,
+                       expected_seen_after_snapshot=history_bytes(expected).decode('utf-8'),
+                       selected_groups=len(selected),deferred_groups=len(deferred))
         stage = 'job_reserve'
-        queue.put('jobs/'+job_id+'.json',latest,sha)
+        # Chain each transition from the exact successful write, with its CAS SHA.
+        # A stale main GET cannot replace accepted receipts; another writer fails CAS.
+        current = change(queue,job_id,reserved,previous=(latest,sha))
         subject = '[부정여론 탐지] '+now().astimezone(common.KST).strftime('%m월 %d일 %H시 기준')
         if not selected:
             subject += ' | 확인필요' if any(p['verdict']=='needs_review' for p in posts.values()) else ' | 탐지 없음'
@@ -306,19 +317,19 @@ def consume_checked(queue, job_id):
                     'message_id': message_id, 'submission': 'may_have_started',
                     'reserved_at': now().isoformat()}
             stage = 'receipt_sending'
-            change(queue,job_id,submitting)
+            current = change(queue,job_id,submitting,previous=current)
             try:
                 stage = 'smtp_send'
                 refused = server.sendmail(sender,[address],payload)
             except smtplib.SMTPRecipientsRefused as error:
                 smtp_observations[key] = {'message_id': message_id, 'submission': 'rejected',
                                           'smtp_codes': [v[0] for v in error.recipients.values()]}
-                change(queue,job_id,lambda row:row['receipts'].update({key:'rejected'}))
+                current = change(queue,job_id,lambda row:row['receipts'].update({key:'rejected'}),previous=current)
                 raise RuntimeError('운영 수신자 SMTP 거부') from None
             if refused:
                 smtp_observations[key] = {'message_id': message_id, 'submission': 'rejected',
                                           'smtp_codes': [v[0] for v in refused.values()]}
-                change(queue,job_id,lambda row:row['receipts'].update({key:'rejected'}))
+                current = change(queue,job_id,lambda row:row['receipts'].update({key:'rejected'}),previous=current)
                 raise RuntimeError('운영 수신자 SMTP 거부')
             smtp_observations[key] = {'message_id': message_id, 'submission': 'accepted',
                                       'observed_at': now().isoformat()}
@@ -326,16 +337,16 @@ def consume_checked(queue, job_id):
                 row['receipts'][key] = 'accepted'
                 row['delivery_evidence'][key].update(smtp_observations[key])
             stage = 'receipt_accepted'
-            change(queue,job_id,accepted)
+            current = change(queue,job_id,accepted,previous=current)
         def delivered(row):
             if not row['receipts'] or any(v!='accepted' for v in row['receipts'].values()):
                 raise RuntimeError('수신자 접수 미완료')
             row.update(status='delivery_complete',delivery_at=now().isoformat(),paid_ai_calls=0,
                        smtp_accepted=len(targets),self_test=False)
         stage = 'delivery_complete'
-        change(queue,job_id,delivered)
+        current = change(queue,job_id,delivered,previous=current)
     except Exception as error:
-        cleanup_error = mark_uncertain(queue,job_id)
+        cleanup_error = mark_uncertain(queue,job_id,previous=current)
         record_consume_failure(queue,job_id,stage,error,cleanup_error,
                                smtp_observations=smtp_observations)
         raise
