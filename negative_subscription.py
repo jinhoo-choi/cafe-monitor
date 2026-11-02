@@ -250,13 +250,25 @@ def consume_checked(queue, job_id):
         raise RuntimeError('구독 분석 결과 없음')
     inputs, posts = common.validate(job,result,allow_production=True)
     selected, deferred = common.selected_groups(result)
-    sender, targets = recipients(len(selected))
+    broadcast = common.broadcast_groups(result,selected)
+    broadcast_ids = {g['group_id'] for g in broadcast}
+    low_score = [g for g in selected if g['group_id'] not in broadcast_ids]
+    low_score_label = '우선 확인' if any(posts[m]['urgency']=='high' for g in low_score for m in g['member_post_ids']) else '경미한 불편'
+    sender, targets = recipients(len(broadcast))
+    configured_targets = set(targets)
     body = common.render(job,result,production=True)
     executive_body = None
-    if selected:
+    owner_body = body
+    low_score_body = None
+    if broadcast:
         from negative_mail import render as render_mail
-        executive_body = render_mail(job,result,inputs,posts,selected,deferred,
+        executive_body = render_mail(job,result,inputs,posts,broadcast,deferred,
                                      production=True,executive=True)
+        owner_body = render_mail(job,result,inputs,posts,broadcast,deferred,production=True)
+        if low_score:
+            low_score_body = render_mail(job,result,inputs,posts,low_score,deferred,production=True)
+            if ERROR_EMAIL not in targets:
+                targets.append(ERROR_EMAIL)
     state, state_hash = common.seen_snapshot()
     if state_hash != job['input']['seen_hash']:
         raise RuntimeError('분석 입력 이후 운영 이력 변경 — 발송 보류')
@@ -268,7 +280,8 @@ def consume_checked(queue, job_id):
     expected = {**retained_history(state),**{identifier:stamp for identifier in processed}}
     expected_hash = hashlib.sha256(history_bytes(expected)).hexdigest()
     # SMTP 로그인 실패 후 pending 재소비에서도 기존 파일의 SHA를 사용한다.
-    for path, value in (('previews/'+job_id+'.json',{'html':body,'paid_ai_calls':0}),
+    for path, value in (('previews/'+job_id+'.json',{'html':body,'executive_html':executive_body,
+            'low_score_html':low_score_body,'paid_ai_calls':0}),
             ('deferred/'+job_id+'.json',{'groups':deferred,'mode':'production',
              'member_post_ids':[p for g in deferred for p in g['member_post_ids']]}),
             ('reviews/'+job_id+'.json',{'post_ids':[p['post_id'] for p in posts.values() if p['verdict']=='needs_review'],
@@ -304,12 +317,24 @@ def consume_checked(queue, job_id):
         # A stale main GET cannot replace accepted receipts; another writer fails CAS.
         current = change(queue,job_id,reserved,previous=(latest,sha))
         subject = '[부정여론 탐지] '+now().astimezone(common.KST).strftime('%m월 %d일 %H시 기준')
-        if not selected:
+        if selected and not broadcast:
+            subject += f' | {low_score_label} · 본인 전용'
+        elif not selected:
             subject += ' | 확인필요' if any(p['verdict']=='needs_review' for p in posts.values()) else ' | 탐지 없음'
         for address,key in zip(targets,keys):
             stage = 'recipient_settings'
             settings(queue,live=True)
-            payload = message(subject,body if not selected or address == OWNER_EMAIL else executive_body,sender,address)
+            recipient_subject = subject
+            recipient_body = body if not broadcast else (owner_body if address == OWNER_EMAIL else executive_body)
+            if broadcast and low_score and address == ERROR_EMAIL:
+                # Explicitly configured Gmail recipients retain their normal report;
+                # an added diagnostic copy contains only below-threshold issues.
+                if address in configured_targets:
+                    recipient_body = body
+                else:
+                    recipient_subject += f' | {low_score_label} · 본인 전용'
+                    recipient_body = low_score_body
+            payload = message(recipient_subject,recipient_body,sender,address)
             message_id = message_from_string(payload)['Message-ID']
             def submitting(row):
                 row['receipts'][key] = 'sending'
@@ -477,5 +502,6 @@ if __name__ == '__main__':
         # 스키마 오류에 포함될 수 있는 비공개 원문·분석을 공개 로그에 출력하지 않는다.
         print('부정여론 구독 경로 보류: '+type(error).__name__,file=sys.stderr)
         raise SystemExit(1)
+
 
 

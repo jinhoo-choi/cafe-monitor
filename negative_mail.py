@@ -5,11 +5,25 @@ from datetime import datetime, timedelta, timezone
 
 KST = timezone(timedelta(hours=9))
 
+
+def severity_colors(score):
+    if score <= 3:
+        return '#2e7d32', '#edf7ed'
+    if score <= 6:
+        return '#9a6700', '#fff4ce'
+    if score <= 8:
+        return '#c05600', '#fff1e6'
+    return '#c62828', '#fdecea'
+
+
 def build_card(post, idx, total):
     title    = html.escape(post["title"])
     url      = html.escape(post["url"], quote=True)
     keyword  = html.escape(post["matched_kw"])
     score    = post["score"]
+    accent, tint = severity_colors(score)
+    priority = ('<p style="margin:0 0 10px;font-size:12px;font-weight:bold;color:#9a6700;">'
+                '우선 확인 · 피해 확정 아님</p>') if post.get('urgency') == 'high' else ''
     summary  = html.escape(post["summary"])
     reply    = html.escape(post.get("reply", ""))
 
@@ -67,25 +81,25 @@ def build_card(post, idx, total):
             <tr>
               {badge_html}
               <td style="padding-left:8px;font-size:10px;font-weight:bold;
-                    color:#c62828;letter-spacing:0.6px;">게시글 {idx} / {total} &nbsp;·&nbsp; {post.get('cafe_name','')}</td>
+                    color:{accent};letter-spacing:0.6px;">게시글 {idx} / {total} &nbsp;·&nbsp; {post.get('cafe_name','')}</td>
             </tr>
           </table>
 
           <table cellpadding="0" cellspacing="0" border="0" style="margin-bottom:10px;">
             <tr>
-              <td style="background:#fdecea;padding:3px 10px;
-                         font-size:11px;font-weight:bold;color:#c62828;">
+              <td style="background:{tint};padding:3px 10px;
+                         font-size:11px;font-weight:bold;color:{accent};">
                 탐지 키워드 : {keyword}
               </td>
               <td width="6"></td>
-              <td style="background:#fdecea;padding:3px 10px;
-                         font-size:11px;font-weight:bold;color:#c62828;">
+              <td style="background:{tint};padding:3px 10px;
+                         font-size:11px;font-weight:bold;color:{accent};">
                 부정 강도 : {score}/10
               </td>
             </tr>
           </table>
 
-          <table width="100%" cellpadding="0" cellspacing="0" border="0"
+          {priority}<table width="100%" cellpadding="0" cellspacing="0" border="0"
                  style="margin-bottom:12px;">
             <tr>
               <td style="vertical-align:top;">
@@ -96,8 +110,8 @@ def build_card(post, idx, total):
               </td>
               <td width="60" style="vertical-align:top;text-align:right;padding-top:2px;">
                 <a href="{url}"
-                   style="font-size:10px;color:#c62828;font-weight:bold;
-                          border:1px solid #c62828;padding:2px 6px;
+                   style="font-size:10px;color:{accent};font-weight:bold;
+                          border:1px solid {accent};padding:2px 6px;
                           text-decoration:none;">↗</a>
               </td>
             </tr>
@@ -109,7 +123,7 @@ def build_card(post, idx, total):
               <td width="3" style="background:#e0e0e0;font-size:0;">&nbsp;</td>
               <td style="padding:12px 14px;">
                 <p style="margin:0 0 5px 0;font-size:10px;font-weight:bold;
-                          color:#c62828;letter-spacing:0.6px;">✦ AI 요약</p>
+                          color:{accent};letter-spacing:0.6px;">✦ AI 요약</p>
                 <p style="margin:0;font-size:13px;color:#555;line-height:1.8;">{summary}</p>
               </td>
             </tr>
@@ -134,6 +148,7 @@ def build_card(post, idx, total):
 def render_email(alert_posts, crawled_count, keyword_count, unresolved_posts=None, now_kst=None, notice_html="", test_badge="", review_label="본문 미수집", review_note=""):
     unresolved_posts = unresolved_posts or []
     total    = len(alert_posts)
+    banner_color, _ = severity_colors(max((p["score"] for p in alert_posts), default=1))
     now_kst  = now_kst or datetime.now(KST)
     now_str  = now_kst.strftime("%Y.%m.%d %H:%M")
     if total > 0:
@@ -215,9 +230,9 @@ def render_email(alert_posts, crawled_count, keyword_count, unresolved_posts=Non
     <table width="600" cellpadding="0" cellspacing="0" border="0"
            style="max-width:600px;width:100%;background:#fff;border:1px solid #d5d9e0;">
       <tr>
-        <td style="background:#c62828;padding:20px 28px;">
+        <td style="background:{banner_color};padding:20px 28px;">
           <p style="margin:0 0 6px 0;font-size:10px;font-weight:bold;
-                    color:#ffcdd2;letter-spacing:0.8px;">{test_badge}{banner_badge}</p>
+                    color:#fff;letter-spacing:0.8px;">{test_badge}{banner_badge}</p>
           <p style="margin:0 0 8px 0;font-size:18px;font-weight:bold;
                     color:#fff;line-height:1.3;">{banner_title}</p>
           <table cellpadding="0" cellspacing="0" border="0">
@@ -229,7 +244,7 @@ def render_email(alert_posts, crawled_count, keyword_count, unresolved_posts=Non
               <td style="font-size:12px;font-weight:bold;color:#fff;padding-right:12px;">{keyword_count}건</td>
               <td style="font-size:10px;color:rgba(255,255,255,0.4);padding-right:12px;">▶</td>
               <td style="font-size:10px;color:rgba(255,255,255,0.6);padding-right:4px;">AI 필터링</td>
-              <td style="font-size:12px;font-weight:bold;color:#ffcdd2;">{total}건</td>
+              <td style="font-size:12px;font-weight:bold;color:#fff;">{total}건</td>
             </tr>
           </table>
           <p style="margin:6px 0 0;font-size:11px;color:rgba(255,255,255,0.5);">
@@ -332,6 +347,9 @@ def _status_email(crawled_count, keyword_count, notices, instant, test):
 
 
 def render(job, result, inputs, posts, selected, deferred, production=False, executive=False):
+    if executive:
+        from negative_verification import broadcast_groups
+        selected = broadcast_groups(result, selected)
     collection = job['input'].get('collection', {})
     coverage = collection.get('coverage', [])
     crawled_count = sum(row.get('listed', 0) for row in coverage) if coverage else len(inputs)
@@ -350,10 +368,11 @@ def render(job, result, inputs, posts, selected, deferred, production=False, exe
         notices.append(f'이월 이슈 {len(deferred)}건 — 다음 회차 확인 대상입니다.')
     alerts = []
     for group in selected:
-        identifier = group['representative_post_id']
+        identifier = max(group['member_post_ids'], key=lambda m: (posts[m]['score'], m==group['representative_post_id']))
         source, post = inputs[identifier], posts[identifier]
         value = _metadata(source, coverage)
-        value.update(matched_kw=_keywords(source), score=post['score'], summary=post['summary'], reply=post['reply_draft'])
+        value.update(matched_kw=_keywords(source), score=post['score'], summary=post['summary'], reply=post['reply_draft'],
+                     urgency='high' if any(posts[m]['urgency']=='high' for m in group['member_post_ids']) else post['urgency'])
         value['related_posts'] = [_metadata(inputs[m], coverage) for m in group['member_post_ids'] if m != identifier]
         value['common_keywords'] = []
         alerts.append(value)
@@ -373,4 +392,5 @@ def render(job, result, inputs, posts, selected, deferred, production=False, exe
                         now_kst=instant, notice_html=_notice(' '.join(notices)),
                         test_badge='[TEST] 본인 전용 · ' if not production else '',
                         review_label=review_label, review_note=review_note)
+
 

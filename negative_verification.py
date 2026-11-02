@@ -388,10 +388,12 @@ def validate(job, result, allow_production=False):
         score = post['score']
         if score is not None and (type(score) not in {int,float} or not math.isfinite(score)):
             raise ValueError('유한한 점수만 허용')
-        if ((score is not None and score >= 7) or post['urgency'] == 'high') and post['reviewed'] is not True:
+        if ((score is not None and score >= 2) or post['urgency'] == 'high') and post['reviewed'] is not True:
             raise ValueError('높은 강도·긴급 사안 검토 미완료')
         if post['verdict'] == 'negative' and (not source.get('target_present') or not brand_present(source['title']+' '+source['body_excerpt'])):
             raise ValueError('한국투자증권 실제 언급 없음')
+        if post['verdict'] == 'negative' and not any(e['field']=='body_excerpt' for e in post['evidence_quotes']):
+            raise ValueError('부정 판정에는 제목 외 본문 근거 필요')
         for evidence in post['evidence_quotes']:
             if evidence['quote'] not in source[evidence['field']] or any(m in evidence['quote'] for m in MASKS):
                 raise ValueError('실제 연속 인용 또는 개인정보 마스킹 검증 실패')
@@ -420,10 +422,19 @@ def validate(job, result, allow_production=False):
 
 def selected_groups(result):
     posts = {p['post_id']:p for p in result['posts']}
-    ordered = sorted(result['groups'], key=lambda g: (posts[g['representative_post_id']]['urgency']!='high',
-                                                    -posts[g['representative_post_id']]['score']))
+    ordered = sorted(result['groups'], key=lambda g: (
+        not any(posts[m]['urgency']=='high' for m in g['member_post_ids']),
+        -max(posts[m]['score'] for m in g['member_post_ids'])))
     bound = config()['max_email_groups']
     return ordered[:bound], ordered[bound:]
+
+
+def broadcast_groups(result, groups):
+    threshold = json.loads(Path('negative_policy.json').read_text(encoding='utf-8'))['score']['threshold']
+    if type(threshold) is not int or threshold != 2:
+        raise ValueError('전체발송 기준은 사용자 승인된 2점 이상만 허용')
+    posts = {p['post_id']:p for p in result['posts']}
+    return [g for g in groups if any(posts[m]['score'] >= threshold for m in g['member_post_ids'])]
 
 
 def render(job, result, production=False):
@@ -566,6 +577,7 @@ def consume(queue, job_id):
         raise
     print(json.dumps({'job_id':job_id,'status':'verified','self_test':True,'smtp_accepted':1,
                       'production_recipients':0,'production_seen_writes':0,'paid_ai_calls':0}))
+
 
 
 

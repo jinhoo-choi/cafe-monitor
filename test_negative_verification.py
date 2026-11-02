@@ -59,6 +59,15 @@ class MemoryQueue:
 
 
 class VerificationRegression(unittest.TestCase):
+    def test_broadcast_candidate_requires_review_and_body_evidence(self):
+        self.result['posts'][0].update(score=2,urgency='normal',reviewed=False)
+        with self.assertRaisesRegex(ValueError,'검토 미완료'):
+            bot.validate(self.job,self.result)
+        self.result['posts'][0]['reviewed']=True
+        self.result['posts'][0]['evidence_quotes']=[{'field':'title','quote':self.job['input']['items'][0]['title']}]
+        with self.assertRaisesRegex(ValueError,'본문 근거'):
+            bot.validate(self.job,self.result)
+
     def test_neutral_information_with_mild_regret_has_no_alert_group(self):
         # Executor-reviewed synthetic contrast cases. This validates transport
         # and policy regressions, not future LLM semantic accuracy.
@@ -90,7 +99,7 @@ class VerificationRegression(unittest.TestCase):
         rules=json.loads(Path('negative_policy.json').read_text())
         self.assertIn('가벼운 선호·아쉬움',rules['classification']['non_negative'])
         self.assertIn('명시적 비판',rules['classification']['context_priority'])
-        self.assertEqual(rules['score']['threshold'],1)
+        self.assertEqual(rules['score']['threshold'],2)
 
     def setUp(self):
         self.job,self.result=fixture()
@@ -485,5 +494,6 @@ class QueueAndRequestRegression(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
 
 
