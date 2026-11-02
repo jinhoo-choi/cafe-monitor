@@ -18,6 +18,112 @@ from test_negative_verification import fixture, MemoryQueue
 
 
 class ProductionRegression(unittest.TestCase):
+    def test_two_point_boundary_controls_actual_envelopes_and_history(self):
+        from email import message_from_string
+        for score in (1,1.99,2,2.01):
+            with self.subTest(score=score):
+                self.path.write_text('{}\n')
+                self.result['posts'][0].update(score=score,urgency='normal',reviewed=True)
+                self.reload_queue()
+                self.server.sendmail.reset_mock()
+                bot.consume(self.queue,self.job['job_id'])
+                envelopes=[c.args[1][0] for c in self.server.sendmail.call_args_list]
+                expected=[bot.OWNER_EMAIL,'ops@example.invalid','cc@example.invalid'] if score>=2 else [bot.ERROR_EMAIL]
+                self.assertEqual(envelopes,expected)
+                mail=message_from_string(self.server.sendmail.call_args.args[2])
+                self.assertIn('부정 강도 : '+str(score)+'/10',mail.get_payload(0).get_payload(decode=True).decode())
+                state=self.queue.get(self.queue.path)[0]
+                self.assertEqual(state['processed_ids'],['blog:offline0'])
+                self.assertEqual(list(state['receipts'].values()),['accepted']*len(expected))
+                self.remote_history=self.path.read_bytes()
+                bot.ack(self.queue,self.job['job_id'])
+                self.assertTrue(self.queue.get(self.queue.path)[0]['history_ack'])
+
+    def test_mixed_low_score_is_only_in_separate_owner_mail(self):
+        from email import message_from_string
+        self.job,self.result=fixture(2)
+        self.job.update(mode='production',self_test=False)
+        self.job['input']['seen_hash']=common.seen_snapshot()[1]
+        for i,source in enumerate(self.job['input']['items']):
+            source.update(dataset='live',title='한국투자증권 경계 사례 '+str(i))
+        self.result['posts'][0].update(score=1,urgency='high')
+        self.result['posts'][1].update(score=2,urgency='normal')
+        self.rehash();self.reload_queue()
+        with patch.dict(os.environ,{'NOTIFY_EMAIL':'risk_aigent@googlegroups.com','EMAIL_CC':''}):
+            bot.consume(self.queue,self.job['job_id'])
+        self.assertEqual([c.args[1] for c in self.server.sendmail.call_args_list],
+                         [['risk_aigent@googlegroups.com'],[bot.ERROR_EMAIL]])
+        for call in self.server.sendmail.call_args_list:
+            body=message_from_string(call.args[2]).get_payload(0).get_payload(decode=True).decode()
+            owner=call.args[1]==[bot.ERROR_EMAIL]
+            self.assertEqual('경계 사례 0' in body,owner)
+            self.assertEqual('경계 사례 1' in body,not owner)
+        self.remote_history=self.path.read_bytes()
+        bot.ack(self.queue,self.job['job_id'])
+        self.assertEqual(len(self.queue.get(self.queue.path)[0]['processed_ids']),2)
+        count=self.server.sendmail.call_count
+        self.assertFalse(bot.consume(self.queue,self.job['job_id']))
+        self.assertEqual(self.server.sendmail.call_count,count)
+
+    def test_low_score_urgency_never_bypasses_two_point_broadcast_threshold(self):
+        from email import message_from_string
+        from email.header import decode_header
+        self.result['posts'][0].update(score=1,urgency='high',reviewed=True)
+        self.reload_queue()
+        bot.consume(self.queue,self.job['job_id'])
+        self.assertEqual([c.args[1] for c in self.server.sendmail.call_args_list],[[bot.ERROR_EMAIL]])
+        mail=message_from_string(self.server.sendmail.call_args.args[2])
+        subject=''.join(v.decode(enc or 'utf-8') if isinstance(v,bytes) else v for v,enc in decode_header(mail['Subject']))
+        self.assertIn('우선 확인 · 본인 전용',subject)
+        self.assertIn('우선 확인 · 피해 확정 아님',mail.get_payload(0).get_payload(decode=True).decode())
+
+    def test_low_score_owner_refusal_blocks_history_and_ack(self):
+        self.result['posts'][0].update(score=1,urgency='normal')
+        self.reload_queue()
+        self.server.sendmail.side_effect=smtplib.SMTPRecipientsRefused({bot.ERROR_EMAIL:(550,b'refused')})
+        before=self.path.read_bytes()
+        with self.assertRaisesRegex(RuntimeError,'SMTP 거부'):
+            bot.consume(self.queue,self.job['job_id'])
+        self.assertEqual(self.path.read_bytes(),before)
+        self.assertEqual(self.queue.get(self.queue.path)[0]['status'],'uncertain')
+        with self.assertRaisesRegex(RuntimeError,'ACK'):
+            bot.ack(self.queue,self.job['job_id'])
+
+    def test_group_maximum_controls_broadcast_ranking_and_display(self):
+        import negative_mail
+        self.job,self.result=fixture(32)
+        self.result['posts'][0].update(score=1,urgency='normal')
+        self.result['posts'][31].update(score=8,urgency='high')
+        group=self.result['groups'][0]
+        group['member_post_ids'].append('blog:offline31')
+        self.result['groups'].pop()
+        selected,deferred=common.selected_groups(self.result)
+        self.assertEqual(selected[0]['group_id'],group['group_id'])
+        self.assertEqual(len(deferred),1)
+        self.assertIn(group,common.broadcast_groups(self.result,selected))
+        inputs={p['post_id']:p for p in self.job['input']['items']}
+        posts={p['post_id']:p for p in self.result['posts']}
+        body=negative_mail.render(self.job,self.result,inputs,posts,[group],[],executive=True)
+        self.assertIn('부정 강도 : 8/10',body)
+        self.assertNotIn('부정 강도 : 1/10',body)
+
+    def test_executive_renderer_independently_excludes_low_score_cards(self):
+        import negative_mail
+        self.result['posts'][0].update(score=1,urgency='normal')
+        inputs,posts=common.validate(self.job,self.result,allow_production=True)
+        with self.assertRaisesRegex(ValueError,'임원용'):
+            negative_mail.render(self.job,self.result,inputs,posts,self.result['groups'],[],executive=True)
+
+    def test_band_colors_and_maximum_banner_are_distinct(self):
+        import negative_mail
+        for score,color in ((1,'#2e7d32'),(2,'#2e7d32'),(5,'#9a6700'),(8,'#c05600'),(9,'#c62828')):
+            value={'title':'한국투자증권 표시 검수','url':'https://example.invalid/item',
+                   'matched_kw':'한투','score':score,'summary':'표시 검수','source':'blog'}
+            body=negative_mail.render_email([value],1,1)
+            self.assertIn('background:'+color+';padding:20px',body)
+            self.assertIn('color:'+color,body)
+            self.assertIn('부정 강도 : '+str(score)+'/10',body)
+
     def test_known_owner_group_removes_direct_company_copy_and_preserves_ack(self):
         from email import message_from_string
         group='risk_aigent@googlegroups.com'
@@ -567,7 +673,7 @@ class ProductionRegression(unittest.TestCase):
         rendered=common.render(self.job,self.result,production=True)
         self.assertIn('AI 요약',rendered)
         self.assertIn('AI 추천 대응',rendered)
-        self.assertIn('background:#c62828',rendered)
+        self.assertIn('background:#9a6700',rendered)
         self.assertIn('부정 강도 :',rendered)
         self.assertNotIn('내부 확인·대응',rendered)
         self.assertNotIn('부정여론 모니터링 결과',rendered)
@@ -617,13 +723,15 @@ class ProductionRegression(unittest.TestCase):
         exec(compile(ast.Module(body=[node],type_ignores=[]),'original-card','exec'),namespace)
         value={'title':'한국투자증권 주문 문의','url':'https://m.blog.naver.com/offline/224000000001',
                'matched_kw':'한국투자증권','score':2,'summary':'원문 요약','reply':'검토용 답변','source':'blog'}
-        self.assertEqual(namespace['build_card'](value,1,1),negative_mail.build_card(value,1,1))
+        original=namespace['build_card'](value,1,1)
+        expected=original.replace('#c62828','#2e7d32').replace('#fdecea','#edf7ed')
+        self.assertEqual(expected,negative_mail.build_card(value,1,1))
         self.smtp.assert_not_called()
 
     def test_owner_preview_uses_restored_layout_without_becoming_production(self):
         self.job.update(mode='verification',self_test=True,production_preview=True)
         rendered=common.render(self.job,self.result)
-        self.assertIn('background:#c62828',rendered)
+        self.assertIn('background:#9a6700',rendered)
         self.assertIn('AI 추천 대응',rendered)
         self.assertIn('[TEST] 본인 전용',rendered)
         self.assertEqual(self.job['mode'],'verification')
@@ -668,7 +776,7 @@ class ProductionRegression(unittest.TestCase):
         mail=message_from_string(bot.message('test',rendered,'111715@koreainvestment.com','ops@example.invalid'))
         part=next(p for p in mail.walk() if p.get_content_type()=='text/html')
         self.assertEqual(part.get_payload(decode=True).decode('utf-8'),rendered)
-        self.assertIn('background:#c62828',part.get_payload(decode=True).decode('utf-8'))
+        self.assertIn('background:#9a6700',part.get_payload(decode=True).decode('utf-8'))
         self.smtp.assert_not_called()
 
 
@@ -938,6 +1046,7 @@ class RecoveryEvidenceRegression(unittest.TestCase):
         self.assertEqual(e['stage'],'preflight_or_render')
 
 if __name__=='__main__':unittest.main()
+
 
 
 
