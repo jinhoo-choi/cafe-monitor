@@ -71,8 +71,30 @@ def outstanding(queue):
             raise RuntimeError('큐 회차 파일 누락')
         if job.get('mode') != 'production' or job.get('status') in TERMINAL:
             continue
-        if (job.get('status') == 'pending' and not job.get('receipts')
+        if (job.get('status') == 'pending' and job.get('receipts') == {}
+                and not any(job.get(key) for key in (
+                    'sending_at', 'delivery_at', 'smtp_accepted', 'history_ack',
+                    'delivery_evidence', 'recipient_fingerprint', 'expected_seen_after_hash',
+                    'processed_ids', 'seen_after_hash'))
                 and datetime.fromisoformat(job['expires_at']) <= now()):
+            attempt, _ = queue.get('analysis-attempts/'+job_id+'.json')
+            result, _ = queue.get('results/'+job_id+'.json')
+            evidence_path = 'failures/'+job_id+'-unstarted-timeout.json'
+            if queue.get(evidence_path)[0] is None:
+                state = (attempt or {}).get('state')
+                code = ('delivery_not_started' if result is not None else
+                        'analysis_evidence_missing' if attempt is None else
+                        'analysis_'+state if state in {'blocked','failed'} else 'analysis_incomplete')
+                queue.put(evidence_path, {
+                    'schema_version':1, 'job_id':job_id, 'observed_at':now().isoformat(),
+                    'code':code, 'cause_confirmed':False,
+                    'last_stage':(attempt or {}).get('stage','unknown'),
+                    'last_updated_at':(attempt or {}).get('updated_at'),
+                    'processed_count':(attempt or {}).get('processed_count'),
+                    'input_count':len(job['input']['items']),
+                    'result_present':result is not None, 'receipts_count':0,
+                    'input_hash':job['input_hash'],
+                    'attempt_path':'analysis-attempts/'+job_id+'.json'})
             job.update(status='expired',expired_at=now().isoformat(),expiration_reason='unstarted_timeout')
             queue.put('jobs/'+job_id+'.json',job,sha)
             print('미발송 만료 회차 정리; API0/재발송0')

@@ -641,6 +641,59 @@ class ProductionRegression(unittest.TestCase):
             bot.collect(self.queue)
         self.smtp.assert_not_called()
 
+    def test_expiry_records_missing_analysis_without_inventing_platform_error(self):
+        self.queue.files['index.json']={'bot_id':'negative_monitor','jobs':[self.job['job_id']]}
+        self.queue.revisions['index.json']='1'
+        self.queue.files[self.queue.path]['expires_at']=(now()-timedelta(seconds=1)).isoformat()
+        self.queue.files.pop('results/'+self.job['job_id']+'.json')
+        before=copy.deepcopy(self.queue.files[self.queue.path])
+        bot.outstanding(self.queue)
+        evidence=self.queue.files['failures/'+self.job['job_id']+'-unstarted-timeout.json']
+        self.assertEqual(evidence['code'],'analysis_evidence_missing')
+        self.assertFalse(evidence['cause_confirmed'])
+        self.assertIsNone(evidence['processed_count'])
+        self.assertEqual(evidence['input_hash'],before['input_hash'])
+        self.assertEqual(self.queue.files[self.queue.path]['input'],before['input'])
+        self.assertEqual(self.queue.files[self.queue.path]['receipts'],{})
+        self.smtp.assert_not_called()
+
+    def test_expiry_preserves_checkpoint_stage_and_delivery_handoff_distinction(self):
+        for saved_result,code in ((False,'analysis_blocked'),(True,'delivery_not_started')):
+            with self.subTest(saved_result=saved_result):
+                self.queue=MemoryQueue(self.job,self.result)
+                self.queue.files['index.json']={'bot_id':'negative_monitor','jobs':[self.job['job_id']]}
+                self.queue.files[self.queue.path]['expires_at']=(now()-timedelta(seconds=1)).isoformat()
+                self.queue.files['analysis-attempts/'+self.job['job_id']+'.json']={
+                    'state':'blocked','stage':'analyzing','processed_count':25}
+                if not saved_result:self.queue.files.pop('results/'+self.job['job_id']+'.json')
+                bot.outstanding(self.queue)
+                evidence=self.queue.files['failures/'+self.job['job_id']+'-unstarted-timeout.json']
+                self.assertEqual((evidence['code'],evidence['processed_count']),(code,25))
+                self.assertFalse(evidence['cause_confirmed'])
+                self.assertEqual(evidence['result_present'],saved_result)
+        self.smtp.assert_not_called()
+
+    def test_expiry_never_discards_missing_receipts_or_delivery_markers(self):
+        for change in ({'receipts':None},{'receipts':[]},{'sending_at':'recorded'},
+                       {'delivery_at':'recorded'},{'delivery_evidence':{'r':'accepted'}},
+                       {'expected_seen_after_hash':'planned'},{'processed_ids':['post']}):
+            with self.subTest(change=change):
+                self.reload_queue()
+                self.queue.files['index.json']={'bot_id':'negative_monitor','jobs':[self.job['job_id']]}
+                self.queue.files[self.queue.path].update(change,expires_at=(now()-timedelta(seconds=1)).isoformat())
+                before=copy.deepcopy(self.queue.files)
+                with self.assertRaisesRegex(RuntimeError,'미종결'):bot.outstanding(self.queue)
+                self.assertEqual(self.queue.files,before)
+        self.smtp.assert_not_called()
+
+    def test_expiry_evidence_write_failure_keeps_original_pending(self):
+        self.queue.files['index.json']={'bot_id':'negative_monitor','jobs':[self.job['job_id']]}
+        self.queue.files[self.queue.path]['expires_at']=(now()-timedelta(seconds=1)).isoformat()
+        with patch.object(self.queue,'put',side_effect=RuntimeError('evidence unavailable')):
+            with self.assertRaisesRegex(RuntimeError,'evidence'):bot.outstanding(self.queue)
+        self.assertEqual(self.queue.files[self.queue.path]['status'],'pending')
+        self.smtp.assert_not_called()
+
     def test_pause_between_login_and_state_record_preserves_pending(self):
         active=bot.settings()
         with patch.object(bot,'settings',side_effect=[active,active,RuntimeError('구독 운영 중지')]):
