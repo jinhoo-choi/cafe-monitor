@@ -18,6 +18,34 @@ from test_negative_verification import fixture, MemoryQueue
 
 
 class ProductionRegression(unittest.TestCase):
+    def test_executive_to_group_cc_preserves_receipts_and_private_low_score_copy(self):
+        from email import message_from_string
+        from email.utils import getaddresses
+        executive = 'kwakjin@koreainvestment.com'
+        group = 'risk_aigent@googlegroups.com'
+        with patch.dict(os.environ, {'NOTIFY_EMAIL': executive, 'EMAIL_CC': group+','+executive}):
+            bot.consume(self.queue, self.job['job_id'])
+        calls = self.server.sendmail.call_args_list
+        self.assertEqual([c.args[1] for c in calls], [[executive], [group]])
+        for call in calls:
+            mail = message_from_string(call.args[2])
+            self.assertEqual([a for _, a in getaddresses(mail.get_all('To'))], [executive])
+            self.assertEqual(mail['Cc'], group)
+            self.assertIsNone(mail['Bcc'])
+        state = self.queue.get(self.queue.path)[0]
+        self.assertEqual(list(state['receipts'].values()), ['accepted', 'accepted'])
+        self.path.write_text('{}\n')
+        self.result['posts'][0].update(score=1, urgency='normal')
+        self.reload_queue()
+        self.server.sendmail.reset_mock()
+        with patch.dict(os.environ, {'NOTIFY_EMAIL': executive, 'EMAIL_CC': group}):
+            bot.consume(self.queue, self.job['job_id'])
+        call = self.server.sendmail.call_args
+        self.assertEqual(call.args[1], [bot.ERROR_EMAIL])
+        mail = message_from_string(call.args[2])
+        self.assertEqual(mail['To'], bot.ERROR_EMAIL)
+        self.assertIsNone(mail['Cc'])
+
     def test_two_point_boundary_controls_actual_envelopes_and_history(self):
         from email import message_from_string
         for score in (1,1.99,2,2.01):

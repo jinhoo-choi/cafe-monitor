@@ -150,11 +150,13 @@ def recipients(negative_count):
     return sender, targets
 
 
-def message(subject, body, sender, address):
+def message(subject, body, sender, address, *, to=None, cc=None):
     result = MIMEMultipart('alternative')
     result['Subject'] = subject
     result['From'] = formataddr((str(Header('부정여론봇','utf-8')),sender))
-    result['To'] = address
+    result['To'] = ', '.join(formataddr(('곽진 본부장' if a == 'kwakjin@koreainvestment.com' else '', a)) for a in to) if to else address
+    if cc:
+        result['Cc'] = ', '.join(cc)
     result['Date'] = formatdate(localtime=True)
     result['Message-ID'] = make_msgid(domain='gmail.com')
     result.attach(MIMEText(body,'html','utf-8'))
@@ -278,6 +280,8 @@ def consume_checked(queue, job_id):
     low_score_label = '우선 확인' if any(posts[m]['urgency']=='high' for g in low_score for m in g['member_post_ids']) else '경미한 불편'
     sender, targets = recipients(len(broadcast))
     configured_targets = set(targets)
+    report_to = [a for a in targets if a.casefold() == 'kwakjin@koreainvestment.com'] if broadcast else []
+    report_cc = [a for a in targets if a not in report_to] if report_to else []
     body = common.render(job,result,production=True)
     executive_body = None
     owner_body = body
@@ -356,7 +360,8 @@ def consume_checked(queue, job_id):
                 else:
                     recipient_subject += f' | {low_score_label} · 본인 전용'
                     recipient_body = low_score_body
-            payload = message(recipient_subject,recipient_body,sender,address)
+            headers = {'to': report_to, 'cc': report_cc} if report_to and address in configured_targets else {}
+            payload = message(recipient_subject,recipient_body,sender,address,**headers)
             message_id = message_from_string(payload)['Message-ID']
             def submitting(row):
                 row['receipts'][key] = 'sending'
