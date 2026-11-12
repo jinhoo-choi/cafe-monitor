@@ -18,6 +18,36 @@ from test_negative_verification import fixture, MemoryQueue
 
 
 class ProductionRegression(unittest.TestCase):
+    def test_long_contextual_summary_reaches_existing_mail_without_truncation(self):
+        from email import message_from_string
+        summary=('작성자는 한국투자증권 앱에서 주문을 시도했지만 계속 실패했고, 실제 체결 여부도 확인할 수 없었다고 주장했다. '
+                 '문제 제기는 주가 하락이나 단순한 화면 선호가 아니라 주문 접수 상태를 알 수 없다는 이용 불편에 관한 것이다. '
+                 '작성자는 주문 화면을 다시 확인하고 안내를 구했으나 원문에 장애 원인이나 회사의 공식 확인 내용은 제시하지 않았으며, '
+                 '오류 때문에 실제 자산 손실이 발생했다는 주장도 하지 않았다. '
+                 '따라서 주문 시도와 접수·체결 내역의 일치 여부를 확인해야 하며, 현재 자료만으로 실제 미체결이나 금전 피해를 확정할 수 없다.')
+        self.assertGreater(len(summary),240)
+        self.assertLessEqual(len(summary),700)
+        source=self.job['input']['items'][0]
+        source['body_excerpt']+='\n'+summary
+        source['body_original_chars']=source['body_excerpt_chars']=len(source['body_excerpt'])
+        self.result['posts'][0]['summary']=summary
+        self.rehash();self.reload_queue()
+        bot.consume(self.queue,self.job['job_id'])
+        for call in self.server.sendmail.call_args_list:
+            mail=message_from_string(call.args[2])
+            body=mail.get_payload(0).get_payload(decode=True).decode()
+            self.assertIn(summary,body)
+            self.assertIn('실제 미체결이나 금전 피해를 확정할 수 없다.',body)
+
+    def test_truncated_blog_negative_stops_before_smtp_and_seen(self):
+        self.job['input']['items'][0]['body_truncated']=True
+        self.rehash();self.reload_queue()
+        with self.assertRaisesRegex(ValueError,'블로그 전체 맥락 미확보'):
+            bot.consume(self.queue,self.job['job_id'])
+        self.server.sendmail.assert_not_called()
+        self.assertEqual(self.queue.get(self.queue.path)[0]['status'],'pending')
+        self.assertEqual(json.loads(self.path.read_text()),{})
+
     def test_executive_to_group_cc_preserves_receipts_and_private_low_score_copy(self):
         from email import message_from_string
         from email.utils import getaddresses

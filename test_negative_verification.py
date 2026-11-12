@@ -59,6 +59,49 @@ class MemoryQueue:
 
 
 class VerificationRegression(unittest.TestCase):
+    def test_blog_reads_full_medium_post_while_cafe_keeps_existing_budget(self):
+        body = ('도입부의 투자 공부 설명입니다.\n' * 180
+                + '한국투자증권 계좌 조건과 타사 비교를 설명합니다.\n'
+                + '결론은 자신의 전략을 수정한다는 내용입니다.\n' * 180)
+        self.assertGreater(len(body),4000)
+        self.assertLess(len(body),16000)
+        blog = bot.item('blog:context','투자 공부 후기',body,
+                        'https://m.blog.naver.com/offline/224000000001','blog','historical')
+        cafe = bot.item('cafe:context','투자 공부 후기',body,
+                        'https://cafe.naver.com/f-e/cafes/100/articles/123456','cafe','historical')
+        self.assertEqual(blog['body_excerpt'],bot.mask(body))
+        self.assertFalse(blog['body_truncated'])
+        self.assertTrue(cafe['body_truncated'])
+        self.assertLessEqual(len(cafe['body_excerpt']),4000)
+
+    def test_long_blog_keeps_purpose_and_conclusion_but_cannot_confirm_negative(self):
+        body = ('한국투자증권 앱에서 주문이 계속 실패해서 불편합니다.\n'
+                + '전략을 검토하는 상세 본문입니다.\n' * 1500
+                + '결론 문단의 회사 귀속과 원인 확인도 필요합니다.')
+        source = bot.item('blog:offline0','한국투자증권 이용 기록',body,
+                          'https://m.blog.naver.com/offline/224000000001','blog','historical')
+        self.assertTrue(source['body_truncated'])
+        self.assertLessEqual(len(source['body_excerpt']),16000)
+        self.assertIn('결론 문단의 회사 귀속',source['body_excerpt'])
+        self.job['input']['items']=[source]
+        self.job['input_hash']=self.result['input_hash']=queue_module.digest(self.job['input'])
+        with self.assertRaisesRegex(ValueError,'블로그 전체 맥락 미확보'):
+            bot.validate(self.job,self.result)
+        self.result['posts'][0].update(verdict='needs_review',score=None,urgency='watch',
+            category='unresolved',reason='전체 맥락이 잘려 회사 불만 확정을 보류한다.')
+        self.result['groups']=[]
+        bot.validate(self.job,self.result)
+        self.assertEqual(bot.selected_groups(self.result)[0],[])
+        self.smtp.assert_not_called()
+
+    def test_other_or_ambiguous_attribution_cannot_be_negative(self):
+        for attribution in ('other','ambiguous'):
+            with self.subTest(attribution=attribution):
+                self.result['posts'][0]['company_attribution']=attribution
+                with self.assertRaises(jsonschema.ValidationError):
+                    bot.validate(self.job,self.result)
+        self.smtp.assert_not_called()
+
     def test_broadcast_candidate_requires_review_and_body_evidence(self):
         self.result['posts'][0].update(score=2,urgency='normal',reviewed=False)
         with self.assertRaisesRegex(ValueError,'검토 미완료'):

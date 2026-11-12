@@ -124,7 +124,7 @@
           },
           "summary": {
             "type": "string",
-            "maxLength": 240
+            "maxLength": 700
           },
           "internal_action": {
             "type": "string",
