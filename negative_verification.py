@@ -164,7 +164,7 @@ def item(post_id, title, body, url, source, dataset, date_str='', previous_score
     if not valid_url(url):
         raise ValueError('실제 게시글 URL 형식 오류')
     # Read ordinary blog posts in full; longer posts retain a wider introduction,
-    # conclusion and company context. Truncated blog negatives remain held below.
+    # conclusion and company context for an evidence-based best-effort review.
     text = (excerpt(body, limit=16000, context_before=1200, context_after=1800,
                     head_chars=4000, tail_chars=3000)
             if source == 'blog' else excerpt(body))
@@ -399,9 +399,6 @@ def validate(job, result, allow_production=False):
             raise ValueError('높은 강도·긴급 사안 검토 미완료')
         if post['verdict'] == 'negative' and (not source.get('target_present') or not brand_present(source['title']+' '+source['body_excerpt'])):
             raise ValueError('한국투자증권 실제 언급 없음')
-        if (post['verdict'] == 'negative' and source.get('source') == 'blog'
-                and source.get('body_truncated')):
-            raise ValueError('블로그 전체 맥락 미확보 — 부정 확정 대신 확인필요 보류')
         if post['verdict'] == 'negative' and not any(e['field']=='body_excerpt' for e in post['evidence_quotes']):
             raise ValueError('부정 판정에는 제목 외 본문 근거 필요')
         for evidence in post['evidence_quotes']:

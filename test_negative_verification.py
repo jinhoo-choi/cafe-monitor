@@ -74,7 +74,7 @@ class VerificationRegression(unittest.TestCase):
         self.assertTrue(cafe['body_truncated'])
         self.assertLessEqual(len(cafe['body_excerpt']),4000)
 
-    def test_long_blog_keeps_purpose_and_conclusion_but_cannot_confirm_negative(self):
+    def test_long_blog_keeps_context_and_allows_evidenced_negative(self):
         body = ('한국투자증권 앱에서 주문이 계속 실패해서 불편합니다.\n'
                 + '전략을 검토하는 상세 본문입니다.\n' * 1500
                 + '결론 문단의 회사 귀속과 원인 확인도 필요합니다.')
@@ -85,13 +85,11 @@ class VerificationRegression(unittest.TestCase):
         self.assertIn('결론 문단의 회사 귀속',source['body_excerpt'])
         self.job['input']['items']=[source]
         self.job['input_hash']=self.result['input_hash']=queue_module.digest(self.job['input'])
-        with self.assertRaisesRegex(ValueError,'블로그 전체 맥락 미확보'):
-            bot.validate(self.job,self.result)
-        self.result['posts'][0].update(verdict='needs_review',score=None,urgency='watch',
-            category='unresolved',reason='전체 맥락이 잘려 회사 불만 확정을 보류한다.')
-        self.result['groups']=[]
         bot.validate(self.job,self.result)
-        self.assertEqual(bot.selected_groups(self.result)[0],[])
+        self.assertEqual(len(bot.selected_groups(self.result)[0]),1)
+        self.result['posts'][0]['evidence_quotes'][0]['quote']='원문에 없는 회사 불만을 만들어낸 인용입니다.'
+        with self.assertRaisesRegex(ValueError,'실제 연속 인용'):
+            bot.validate(self.job,self.result)
         self.smtp.assert_not_called()
 
     def test_other_or_ambiguous_attribution_cannot_be_negative(self):

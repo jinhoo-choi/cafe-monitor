@@ -39,14 +39,18 @@ class ProductionRegression(unittest.TestCase):
             self.assertIn(summary,body)
             self.assertIn('실제 미체결이나 금전 피해를 확정할 수 없다.',body)
 
-    def test_truncated_blog_negative_stops_before_smtp_and_seen(self):
+    def test_truncated_blog_with_evidence_keeps_delivery_and_history(self):
         self.job['input']['items'][0]['body_truncated']=True
         self.rehash();self.reload_queue()
-        with self.assertRaisesRegex(ValueError,'블로그 전체 맥락 미확보'):
-            bot.consume(self.queue,self.job['job_id'])
-        self.server.sendmail.assert_not_called()
-        self.assertEqual(self.queue.get(self.queue.path)[0]['status'],'pending')
-        self.assertEqual(json.loads(self.path.read_text()),{})
+        bot.consume(self.queue,self.job['job_id'])
+        self.assertGreater(self.server.sendmail.call_count,0)
+        state=self.queue.get(self.queue.path)[0]
+        self.assertTrue(all(value=='accepted' for value in state['receipts'].values()))
+        self.assertEqual(state['status'],'delivery_complete')
+        self.assertIn(self.result['posts'][0]['post_id'],json.loads(self.path.read_text()))
+        self.remote_history=self.path.read_bytes()
+        bot.ack(self.queue,self.job['job_id'])
+        self.assertTrue(self.queue.get(self.queue.path)[0]['history_ack'])
 
     def test_executive_to_group_cc_preserves_receipts_and_private_low_score_copy(self):
         from email import message_from_string
