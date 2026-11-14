@@ -8,6 +8,7 @@ on:
         default: false
 permissions:
   contents: write
+  actions: read
 concurrency:
   group: naver-cafe-monitor
   cancel-in-progress: false
@@ -36,13 +37,19 @@ jobs:
               raise ValueError('Laptop accepts subscription engine only; no API fallback')
           with open(os.environ['GITHUB_OUTPUT'],'a') as output: output.write('value='+value+'\n')
           PY
+      - name: 승인된 수집 시각 확인 — 큐·본문·SMTP 접근 전
+        id: collection_schedule
+        if: steps.engine.outputs.value == 'subscription' && inputs.dry_run != true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python negative_collection_schedule.py
       - name: 수집 패키지·브라우저 설치
-        if: steps.engine.outputs.value != 'paused' && runner.environment != 'self-hosted'
+        if: steps.engine.outputs.value != 'paused' && runner.environment != 'self-hosted' && (steps.engine.outputs.value != 'subscription' || inputs.dry_run == true || steps.collection_schedule.outputs.allowed == 'true')
         run: |
           pip install requests playwright jsonschema pynacl
           playwright install --with-deps chromium
       - name: 네이버 쿠키 복원
-        if: steps.engine.outputs.value != 'paused'
+        if: steps.engine.outputs.value != 'paused' && (steps.engine.outputs.value != 'subscription' || inputs.dry_run == true || steps.collection_schedule.outputs.allowed == 'true')
         env:
           NAVER_COOKIE_STATE: ${{ secrets.NAVER_COOKIES_JSON }}
         run: |
@@ -67,14 +74,14 @@ jobs:
               print('egress_country=unverified')
           PY
       - name: 저장된 쿠키의 회원 본문 확인 — 로그인0·갱신0·메일0·큐쓰기0
-        if: steps.engine.outputs.value == 'subscription'
+        if: steps.engine.outputs.value == 'subscription' && (inputs.dry_run == true || steps.collection_schedule.outputs.allowed == 'true')
         env:
           NEGATIVE_QUEUE_TOKEN: ${{ secrets.NEGATIVE_QUEUE_TOKEN }}
           NAVER_COOKIE_PROBES_JSON: ${{ secrets.NAVER_COOKIE_PROBES_JSON }}
           COOKIE_AUTO_RENEW_ENABLED: 'true'
         run: python refresh_cookies.py --mode check
       - name: 구독 회차 수집 — API0·운영 발송0·이력 쓰기0
-        if: steps.engine.outputs.value == 'subscription'
+        if: steps.engine.outputs.value == 'subscription' && (inputs.dry_run == true || steps.collection_schedule.outputs.allowed == 'true')
         env:
           NEGATIVE_QUEUE_TOKEN: ${{ secrets.NEGATIVE_QUEUE_TOKEN }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
@@ -104,11 +111,15 @@ jobs:
           done
           exit 1
       - name: 구독 오류 본인 알림
-        if: failure() && steps.engine.outputs.value == 'subscription' && inputs.dry_run != true
+        if: failure() && steps.engine.outputs.value == 'subscription' && inputs.dry_run != true && (steps.collection_schedule.outputs.allowed == 'true' || steps.collection_schedule.outcome == 'failure')
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PW: ${{ secrets.GMAIL_APP_PW }}
-        run: python negative_subscription.py notify-error
+        run: |
+          if [ '${{ steps.collection_schedule.outcome }}' = 'failure' ]; then
+            pip install jsonschema
+          fi
+          python negative_subscription.py notify-error
       - name: 로그인 쿠키 제거
         if: always()
         run: rm -f naver_cookies.json naver_cookie_status.json .naver_cookie_*
