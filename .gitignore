@@ -4,3 +4,4 @@ naver_cookie_status.json
 __pycache__/
 *.log
 *.pyc
+.negative_manual_data/

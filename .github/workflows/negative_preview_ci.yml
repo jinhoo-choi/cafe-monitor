@@ -16,9 +16,9 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install requests playwright jsonschema pyyaml pynacl
-      - run: python -m py_compile negative_queue.py negative_verification.py negative_verification_request.py negative_subscription.py monitor.py
+      - run: python -m py_compile negative_queue.py negative_verification.py negative_verification_request.py negative_subscription.py negative_manual.py monitor.py
       - name: 메일·상태·비용·원문 검증 오프라인 회귀
-        run: python -m unittest -v test_negative_verification test_negative_subscription test_cookie_refresh test_cookie_provenance test_laptop_runner
+        run: python -m unittest -v test_negative_verification test_negative_subscription test_cookie_refresh test_cookie_provenance test_laptop_runner test_negative_manual
       - name: JSON Schema·워크플로 검증
         run: |
           python - <<'PY'
