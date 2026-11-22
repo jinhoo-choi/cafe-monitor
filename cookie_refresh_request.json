@@ -1,5 +1,5 @@
 {
   "operation": "cookie_preflight",
-  "mode": "auto",
-  "request_id": "owner-cookie-renew-20261122T145721Z"
+  "mode": "check",
+  "request_id": "owner-manual-cookie-check-20261122T151353Z"
 }
