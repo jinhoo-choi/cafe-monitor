@@ -1,4 +1,127 @@
-# 부정여론봇 쿠키 점검과 조건부 갱신
+# 부정여론봇 쿠키 갱신 표준 절차
+
+## 기본 경로 — 2026-11-23 소유자 확정
+
+**국내 Windows CMD → 사용자가 네이버 로그인 → 쿠키 JSON 전체를 GitHub Secret에 붙여넣기 → 실행자가 읽기 전용 인증 검증** 순서로 처리한다.
+
+사용자가 “쿠키 갱신”, “기존 방식”이라고 하면 이 경로를 기본으로 사용한다. 일반 갱신에 GitHub CLI OAuth 로그인, 광범위한 `repo` 권한 추가, 자동 로그인 러너 `mode=auto`를 끼워 넣지 않는다. 기존 자동 갱신 코드는 남아 있지만 기본 사용자 절차는 아니다. 자동 로그인 경로는 사용자가 그 방식을 명시적으로 별도 요청했을 때만 검토한다.
+
+이미 새 쿠키 파일이 있으면 로그인·파일 생성을 반복하지 않고 **2번 Secret 등록부터** 진행한다. JSON 형식과 필수 쿠키 상태를 값 노출 없이 확인하면 된다. 현재 정상 인증이 확인된 Secret을 문서나 도구 변경 때문에 다시 등록하지 않는다.
+
+### 1. 국내 PC에서 쿠키 파일 만들기
+
+가장 간단한 방법은 저장소의 [renew_naver_cookies.cmd](renew_naver_cookies.cmd)를 국내 Windows PC에 내려받아 실행하는 것이다.
+
+- 최초 실행에는 Python의 `py` 명령이 필요하다. CMD가 사용자 폴더에 가상환경과 Playwright를 준비하고 다음 실행에서 재사용한다.
+- 열린 브라우저에서 사용자가 네이버 로그인·추가 인증을 직접 완료한다.
+- 같은 브라우저에서 회원 카페 게시글 본문이 열리는지 확인한다.
+- 브라우저와 Playwright Inspector를 정상 종료하면 쿠키 파일이 저장된다.
+- CMD는 JSON 형식과 `NID_AUT`·`NID_SES`의 값 존재·도메인·만료 상태를 검사한다. 이 검사는 실제 회원 본문 인증 성공 판정이 아니다.
+- 원본 쿠키 값은 유지하고 줄바꿈 없는 Secret용 JSON을 별도 생성해 클립보드에 복사한다. 한 줄 JSON은 Actions에서 JSON 구두점까지 광범위하게 마스킹되는 일을 줄이기 위한 형식이며 쿠키 값·만료를 바꾸지 않는다.
+- GitHub Secret 설정 화면이 열린다. CMD는 로그인 정보나 쿠키를 채팅·저장소·artifact에 보내지 않으며 CLI OAuth나 자동 로그인 갱신을 실행하지 않는다.
+- 이미 만들어진 원본 JSON도 정상 형식이면 그대로 등록할 수 있다. 한 줄 형식으로 바꾸기 위해 정상 Secret을 다시 저장할 필요는 없다.
+
+CMD에 직접 붙여넣는 기존 명령을 원하면 아래를 안내한다.
+
+```cmd
+if not exist "%USERPROFILE%\naver-cookie-refresh" mkdir "%USERPROFILE%\naver-cookie-refresh"
+cd /d "%USERPROFILE%\naver-cookie-refresh"
+
+if not exist ".venv\Scripts\python.exe" py -m venv .venv
+.venv\Scripts\python.exe -m pip install playwright
+.venv\Scripts\python.exe -m playwright install chromium
+
+set "COOKIE_REFRESH_FILE=%CD%\naver_cookies_%RANDOM%_%RANDOM%.json"
+.venv\Scripts\python.exe -m playwright codegen --save-storage="%COOKIE_REFRESH_FILE%" https://nid.naver.com/nidlogin.login
+```
+
+로그인·본문 확인 후 브라우저와 Inspector를 닫고 같은 CMD에서 이어간다.
+
+```cmd
+clip < "%COOKIE_REFRESH_FILE%"
+start "" "https://github.com/jinhoo-choi/cafe-monitor/settings/secrets/actions"
+```
+
+이 직접 명령 방식은 파일 검사를 자동 수행하지 않는다. 파일이 없거나 로그인 완료가 불확실하면 등록하지 말고 값을 노출하지 않는 JSON·필수 쿠키 검사를 먼저 한다. 자동 검사가 필요하면 위 CMD 파일을 사용한다.
+
+### 2. NAVER_COOKIES_JSON에 JSON 전체 붙여넣기
+
+설정 화면: https://github.com/jinhoo-choi/cafe-monitor/settings/secrets/actions
+
+1. 기존 `NAVER_COOKIES_JSON`의 수정 버튼을 누른다. 없을 때만 같은 이름으로 생성한다.
+2. Value에 생성된 JSON **내용 전체**를 붙여넣는다. 파일명·경로·코드 블록 표시·설명 문구·base64를 넣지 않는다.
+3. **Update secret**을 누르고 저장 완료 표시를 확인한다.
+4. 담당 대화에 **“Secret 저장 완료. 쿠키 인증 검증해줘.”**라고 알린다.
+5. 저장 후 클립보드를 비운다. CMD 파일은 사용자가 저장 후 키를 누르면 이를 수행한다.
+
+직접 명령 방식에서는 다음으로 클립보드를 비울 수 있다.
+
+```cmd
+powershell -NoProfile -Command "Set-Clipboard -Value ''"
+```
+
+쿠키 원문·비밀번호·인증번호를 채팅에 보낼 필요가 없다. Secret 저장은 사용자 웹 화면의 기존 저장소 권한으로 처리한다. 실행자의 API/CLI에서 `403`이 나면 그 경로의 권한 오류로 기록하고 웹 붙여넣기 절차를 그대로 사용한다. 추가 OAuth 로그인이나 권한 확대로 해결된다고 추정하거나 사용자를 반복 인증시키지 않는다.
+
+### 3. 실행자가 읽기 전용으로 검증하기
+
+사용자가 저장 완료를 알리면 실행자가 기존 실행 상태를 먼저 확인하고, 중복 검증이 없을 때 아래 **한 경로만** 사용한다.
+
+**국내 러너가 온라인이면 기존 `check` 요청:**
+
+- 최신 main의 engine·워크플로·요청 파일 SHA와 관련 실행 상태를 확인한다.
+- `cookie_refresh_request.json`에 다음 메타데이터만 최신 SHA로 갱신한다. `request_id`는 이번 검증을 구분하는 고유 값으로 만든다.
+- 요청을 재조회하고 해당 커밋의 Actions 실행 ID를 확인한다.
+- `mode=check`는 새 로그인·Secret 쓰기·메일·운영 수집 없이 국내 검사 후 클라우드 검사를 수행한다.
+
+```json
+{"operation":"cookie_preflight","mode":"check","request_id":"고유한-검증-ID"}
+```
+
+**아직 요청하지 않았고 국내 러너를 사용할 수 없다면:**
+
+- 국내 러너에 의존하지 않는 기존 `monitor.yml`의 **main, dry_run=true** 검증을 사용한다.
+- 실행자가 기존 연결로 dispatch할 수 없으면 사용자에게 아래 화면에서 **main → dry_run=true → Run workflow**만 요청한다. CLI 추가 로그인은 요구하지 않는다.
+- 이미 `check`가 제출돼 배정 대기라면 같은 검증을 중복 요청하거나 자동 로그인으로 바꾸지 않는다. 기존 실행의 상태와 필요한 러너 조치를 알린다.
+- 검증 경로를 전환할 때는 기존 대기 실행이 해소됐는지 먼저 확인한다. 실행 중인 검증을 이유 없이 취소하거나 중복 생성하지 않는다.
+
+워크플로 화면: https://github.com/jinhoo-choi/cafe-monitor/actions/workflows/monitor.yml
+
+### 완료 기준
+
+- Secret에서 복원된 `NID_AUT`와 `NID_SES`가 존재하고 유효하다.
+- 서로 다른 회원 게시글 2건 모두 익명 접근에서는 제한되고, 인증된 컨텍스트에서는 실제 본문이 확보된다.
+- 본문 요청에 인증 쿠키가 실제 전달됐는지 정제 진단을 확인한다.
+- **클라우드 `healthy`가 필수**다. 국내와 클라우드를 모두 검사했다면 각각 결과를 구분한다.
+- `login_attempted=false`, `secret_updated=false`, 유료 AI/API 0, 메일·운영 수집·운영 이력 쓰기 0을 확인한다. 여기서 `secret_updated=false`는 검증 실행이 Secret을 다시 쓰지 않았다는 뜻이며, 사용자의 직전 웹 등록 실패를 뜻하지 않는다.
+- `session_reused`는 복원된 Secret의 인증 성공을 뜻한다. 정상 쿠키를 다시 로그인하거나 덮어쓰지 않는다.
+- Actions success·쿠키 파일 존재·Secret 저장 화면만으로 완료라고 하지 않는다.
+- 읽기 전용 검사로 현재 인증을 확인한 것과 다음 자연 운영 회차의 실제 수집·분석·발송 성공을 구분한다. 실패 회차를 소급 수집·발송하지 않는다.
+
+최종 안내는 다음처럼 짧게 한다.
+
+> 쿠키 갱신 반영 확인: 국내/클라우드 healthy, 회원 본문 2건 확보, 로그인·Secret 재변경·메일·유료 API 0. 검증 Actions 링크. 다음 자연 운영 회차는 별도 확인.
+
+### 실패하면 해당 단계만 확인
+
+| 상태 | 다음 조치 |
+| --- | --- |
+| JSON 오류·필수 인증 쿠키 누락·만료 | 파일/로그인 완료 여부 확인. 파일이 잘못됐을 때만 새로 생성 |
+| Secret 웹 저장 미완료 | JSON 전체를 올바른 Secret에 붙여넣고 Update secret 확인 |
+| 실행자의 Secrets API 403 | 웹 등록 유지. 권한 확대·반복 OAuth로 우회하지 않음 |
+| 국내 runner queued | 온라인/할당 상태를 구분. Secrets 갱신 실패로 단정하지 않음 |
+| cloud auth invalid / human_required | 실제 원문 상태 보고, 추가 인증은 사용자 처리. 반복 로그인 금지 |
+| 요청/저장 결과 불확실 | 반영 여부부터 확인. 무작정 재요청하지 않음 |
+| Actions JSON 로그 일부 마스킹 | 보이는 고정 상태·본문 판정·전송 상태만 대조. 마스킹 내용을 복원하지 않음 |
+
+### 재사용할 실제 확인 근거
+
+2026-11-23 KST 수동 웹 등록 후 [검증 실행 45037202665](https://github.com/jinhoo-choi/cafe-monitor/actions/runs/45037202665)가 성공했다. 국내 `00:15:16`, 클라우드 `00:16:31` 검사 모두 `healthy`였으며 익명 `auth_required` 2건, 인증 `body` 2건, 본문 요청 쿠키 전달을 확인했다. 새 로그인·Secret 재변경·메일·유료 AI/API는 없었다. 이 기록은 절차의 실제 검증 근거이며 다음번 쿠키의 정상 여부를 대신하지 않는다.
+
+---
+
+## 기존 자동 갱신 구현 참고 — 일반 수동 갱신의 기본 경로 아님
+
+아래는 기존 코드의 동작·보호 조건에 대한 기술 참고다. 일반 사용자 갱신은 위 수동 절차를 우선한다. 기존 코드·엔진·수신자·일정은 이 문서 정리로 변경하지 않는다.
 
 수집은 `monitor.yml`의 GitHub Ubuntu에서 실행하고, 쿠키 갱신만 국내 노트북에서 실행한다.
 수집 전에는 저장된 GitHub Secret 쿠키를 복원해 `check`로 실제 회원 본문 접근만 확인한다.
