@@ -418,14 +418,14 @@ def parse_date(date_str):
         pass
     return now
 
-def search_keyword(page, cafe_id, num_id, keyword):
+def search_keyword(page, cafe_id, num_id, keyword, *, cutoff=None, number=1, coverage=None):
     """카페 인카페 검색으로 키워드 포함 게시글 수집 (24시간 이내)"""
     encoded = urllib.parse.quote(keyword)
     # 가계부/절약 카페는 제목 전용 검색으로 오탐 방지
     if cafe_id in ["onepieceholicplus"]:
-        url = f"https://cafe.naver.com/f-e/cafes/{num_id}/menus/0?viewType=L&ta=TITLE&page=1&q={encoded}"
+        url = f"https://cafe.naver.com/f-e/cafes/{num_id}/menus/0?viewType=L&ta=TITLE&page={number}&q={encoded}"
     else:
-        url = f"https://cafe.naver.com/f-e/cafes/{num_id}/menus/0?viewType=L&ta=ARTICLE_COMMENT&page=1&q={encoded}"
+        url = f"https://cafe.naver.com/f-e/cafes/{num_id}/menus/0?viewType=L&ta=ARTICLE_COMMENT&page={number}&q={encoded}"
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=20000)
     except Exception as e:
@@ -435,7 +435,7 @@ def search_keyword(page, cafe_id, num_id, keyword):
 
     log(f"  검색: [{keyword}] → {url[:80]}")
 
-    cutoff = datetime.now(KST) - timedelta(hours=TIME_WINDOW)
+    cutoff = cutoff or datetime.now(KST) - timedelta(hours=TIME_WINDOW)
     posts  = []
 
     rows = []
@@ -491,6 +491,8 @@ def search_keyword(page, cafe_id, num_id, keyword):
             if re.fullmatch(r'\d{4}\.\d{2}\.\d{2}', date_str) or date_str == '어제':
                 latest_possible += timedelta(days=1)
             if latest_possible < cutoff:
+                if coverage is not None:
+                    coverage["older"] = True
                 continue
 
             posts.append({
@@ -507,12 +509,22 @@ def search_keyword(page, cafe_id, num_id, keyword):
     return posts
 
 
-def get_post_list(page, cafe_id, num_id):
+def get_post_list(page, cafe_id, num_id, keywords=None, *, cutoff=None, coverage=None):
     """키워드별 검색으로 게시글 수집 (전체 목록 스캔 불필요)"""
     all_posts = {}
 
-    for keyword in KEYWORDS:
-        results = search_keyword(page, cafe_id, num_id, keyword)
+    for keyword in KEYWORDS if keywords is None else keywords:
+        results = []
+        for number in range(1, 4 if cutoff is not None else 2):
+            page_state = {}
+            batch = search_keyword(page, cafe_id, num_id, keyword, cutoff=cutoff,
+                                   number=number, coverage=page_state)
+            results.extend(batch)
+            if not batch or page_state.get("older"):
+                break
+        else:
+            if coverage is not None:
+                coverage["capped"] = True
         for p in results:
             pid = p["post_id"]
             if pid not in all_posts:
