@@ -507,11 +507,11 @@ def search_keyword(page, cafe_id, num_id, keyword):
     return posts
 
 
-def get_post_list(page, cafe_id, num_id):
+def get_post_list(page, cafe_id, num_id, keywords=None):
     """키워드별 검색으로 게시글 수집 (전체 목록 스캔 불필요)"""
     all_posts = {}
 
-    for keyword in KEYWORDS:
+    for keyword in KEYWORDS if keywords is None else keywords:
         results = search_keyword(page, cafe_id, num_id, keyword)
         for p in results:
             pid = p["post_id"]
