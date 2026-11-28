@@ -1,5 +1,6 @@
 """Collect dated public Naver evidence. Never send notifications or invoke a model."""
 import contextlib
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -55,48 +56,45 @@ def matches(text):
             if any(alias.replace(" ","").casefold() in text_by_issuer.get(issuer,flat) for alias in aliases)]
 
 
-def candidates(browser, bot, state, now, session, last_ok=None):
+def candidates(browser, bot, state, now, session, last_ok=None, *, board=None):
     public = browser.new_context()
     discovery = browser.new_context(storage_state=session) if session else public
     blog, cafe, article = public.new_page(), discovery.new_page(), public.new_page()
     latest, counts = {}, {}
-    # Discovery samples two public boards. Every detail is read signed out.
-    boards = [b for b in bot.CAFES if not b["login_required"] and b["id"] in {"ustock","divclub","dlxogns01"}]
+    channel = "cafe" if board else "blog"
     for issuer, aliases in ALIASES.items():
-        for channel in ("blog", "cafe"):
-            stat = counts[issuer + "/" + channel] = {"listed":0, "read":0, "cached":0, "failed":0, "unverifiedSearch":0,"scope":"2 public cafes; up to 3 search pages per term" if channel=="cafe" else "latest search page"}
-            last = (last_ok or {}).get(issuer+"/"+channel)
-            since = datetime.fromisoformat(last)-timedelta(hours=3) if last else now-timedelta(days=7)
-            stat["from"] = since.isoformat(timespec="minutes")
-            for scope in ([None] if channel == "blog" else boards):
-                for term in aliases:
-                    try:
-                        if scope is None:
-                            found = bot.search_naver_blog(blog, term)
-                        else:
-                            coverage = {}
-                            found = bot.get_post_list(cafe, scope["id"], scope["num_id"], [term],
-                                                      cutoff=since,coverage=coverage)
-                            if coverage.get("capped"):
-                                stat["unverifiedSearch"] += 1
-                        if not found:
-                            page = cafe if scope else blog
-                            if not page.get_by_text(re.compile("검색결과가 없습니다|검색 결과가 없습니다|검색 결과가 없어요")).count():
-                                stat["unverifiedSearch"] += 1
-                    except Exception:
-                        stat["failed"] += 1
-                        continue
-                    for hit in found:
-                        pair = identity(hit["url"])
-                        if not pair:
-                            continue
-                        key, url = pair
-                        if key not in latest:
-                            latest[key] = (url, scope, hit.get("title",""), {})
-                        matched = latest[key][3]
-                        if issuer+"/"+channel not in matched:
-                            stat["listed"] += 1
-                            matched[issuer+"/"+channel] = stat
+        stat = counts[issuer + "/" + channel] = {"listed":0, "read":0, "cached":0, "failed":0, "unverifiedSearch":0,"scope":board["id"] if board else "latest search page"}
+        last = (last_ok or {}).get(issuer+"/"+channel)
+        since = datetime.fromisoformat(last)-timedelta(hours=3) if last else now-timedelta(days=7)
+        stat["from"] = since.isoformat(timespec="minutes")
+        for term in aliases:
+            try:
+                if board is None:
+                    found = bot.search_naver_blog(blog, term)
+                else:
+                    coverage = {}
+                    found = bot.get_post_list(cafe, board["id"], board["num_id"], [term],
+                                              cutoff=since,coverage=coverage)
+                    if coverage.get("capped"):
+                        stat["unverifiedSearch"] += 1
+                if not found:
+                    page = cafe if board else blog
+                    if not page.get_by_text(re.compile("검색결과가 없습니다|검색 결과가 없습니다|검색 결과가 없어요")).count():
+                        stat["unverifiedSearch"] += 1
+            except Exception:
+                stat["failed"] += 1
+                continue
+            for hit in found:
+                pair = identity(hit["url"])
+                if not pair:
+                    continue
+                key, url = pair
+                if key not in latest:
+                    latest[key] = (url, board, hit.get("title",""), {})
+                matched = latest[key][3]
+                if issuer+"/"+channel not in matched:
+                    stat["listed"] += 1
+                    matched[issuer+"/"+channel] = stat
     records = {}
     for key, (url, board, list_title, matched) in latest.items():
         def count(field):
@@ -164,18 +162,51 @@ def main():
             else:
                 target.update({row["sourceId"]:row for row in batch if row["on"]>=cutoff})
     session = os.environ.pop("VOICE_NAVER_STATE","")
-    with sync_playwright() as p, open(os.devnull,"w") as sink:
-        browser = p.chromium.launch(headless=True)
-        with contextlib.redirect_stdout(sink):
-            new, stats = candidates(browser, bot, state, now, json.loads(session) if session else None, old.get("lastSuccess"))
-        browser.close()
-    # Keep unconsumed recent candidates through an afternoon retry or a missed briefing.
-    pending.update(new)
-    index = {"checkedAt":now.isoformat(timespec="seconds"),"channels":stats}
+    # Per-source cursors allow new and previously unavailable boards to catch up.
+    boards = {b["id"]: b for b in bot.CAFES}
+    scopes = [None, *boards.values()]
+    cursors = dict(old.get("sourceSuccess", {}))
+    session = json.loads(session) if session else None
+
+    def run_scope(board):
+        source = board["id"] if board else "blog"
+        prefix = "cafe:"+board["num_id"]+":" if board else "blog:"
+        local_state = {k:v for k,v in state.items() if k.startswith(prefix)}
+        since = cursors.get(source, {} if board else old.get("lastSuccess", {}))
+        with sync_playwright() as driver:
+            browser = driver.chromium.launch(headless=True)
+            try:
+                rows, counts = candidates(browser, bot, local_state, now, session, since, board=board)
+            finally:
+                browser.close()
+        return source, local_state, rows, counts
+
+    checked = now.isoformat(timespec="seconds")
+    per_source, stats, revisions = {}, {}, {}
+    # Source IDs and article IDs occupy disjoint namespaces across boards.
+    # Collect isolated sources concurrently; only this thread writes the index.
+    with open(os.devnull,"w") as sink, contextlib.redirect_stdout(sink), ThreadPoolExecutor(max_workers=3) as pool:
+        for source, local_state, rows, counts in pool.map(run_scope, scopes):
+            revisions.update(rows)
+            pending.update(rows)
+            cursors.setdefault(source, {})
+            for channel, stat in counts.items():
+                if not stat["failed"] and not stat["unverifiedSearch"]:
+                    cursors[source][channel] = checked
+                total = stats.setdefault(channel, {"scope":"all registered cafes" if source!="blog" else "latest search page",
+                                                  "from":stat["from"]})
+                total["from"] = min(total["from"], stat["from"])
+                for field in ("listed","read","cached","failed","unverifiedSearch"):
+                    total[field] = total.get(field,0) + stat[field]
+            # Keep state immutable during parallel scans. Merge completed shards below.
+            per_source[source] = {"channels": counts, "state": local_state}
+    for shard in per_source.values():
+        state.update(shard.pop("state"))
+    index = {"checkedAt":checked, "channels":stats, "sourceStats":per_source, "sourceSuccess":cursors}
     last_ok = dict(old.get("lastSuccess",{}))
     for channel, stat in stats.items():
         if not stat["failed"] and not stat["unverifiedSearch"]:
-            last_ok[channel] = index["checkedAt"]
+            last_ok[channel] = checked
     index["lastSuccess"] = last_ok
     for kind, rows, size in (("statePages",sorted(state.items()),150),
                              ("pages",sorted(pending.values(),key=lambda r:(r["on"],r["sourceId"])),12)):
@@ -192,7 +223,7 @@ def main():
     queue.put(path,index,sha)
     if queue.get(path)[0] != index:
         raise RuntimeError("private index readback mismatch")
-    print("verified channels",len(stats),"new revisions",len(new),"model calls 0")
+    print("verified channels",len(stats),"new revisions",len(revisions),"cafes searched",len(boards),"model calls 0")
     if all(not s["read"] and not s["cached"] and (s["failed"] or s["unverifiedSearch"]) for s in stats.values()):
         raise RuntimeError("all sources unverified; private diagnostics saved")
 

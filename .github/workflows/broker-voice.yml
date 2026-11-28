@@ -2,7 +2,7 @@ name: Broker customer voice
 on:
   push:
     branches: [main]
-    paths: ['.github/workflows/broker-voice.yml']
+    paths: ['.github/workflows/broker-voice.yml', 'broker_voice_collect.py']
   workflow_dispatch:
   schedule:
     - cron: '15 21,6 * * *'
@@ -15,7 +15,7 @@ jobs:
   collect:
     if: github.repository == 'jinhoo-choi/cafe-monitor' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 44
+    timeout-minutes: 100
     steps:
       - uses: actions/checkout@v4
         with:
