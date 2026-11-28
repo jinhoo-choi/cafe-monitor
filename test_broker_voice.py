@@ -74,7 +74,17 @@ class Sources:
 
 class CollectorTests(unittest.TestCase):
     def collect(self, source, state=None):
-        return collector.candidates(Browser(), source, {} if state is None else state, NOW, {"cookies": []})
+        if state is None:
+            state = {}
+        posts, stats = {}, {}
+        for board in [None, *source.CAFES]:
+            rows, channels = collector.candidates(Browser(), source, state, NOW, {"cookies": []}, board=board)
+            posts.update(rows)
+            for key, counts in channels.items():
+                totals = stats.setdefault(key, dict.fromkeys(("read","cached","listed","failed"),0))
+                for field in totals:
+                    totals[field] += counts[field]
+        return posts, stats
 
     def test_canonical_key_and_dates(self):
         self.assertEqual(collector.identity(MOBILE), collector.identity(DESKTOP+"?from=search"))
@@ -108,10 +118,10 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(counts["KIS/blog"]["failed"],1)
         self.assertEqual(counts["SAM/blog"]["failed"],1)
 
-    def test_public_boards_only(self):
+    def test_all_configured_boards_are_searched(self):
         sources = Sources()
         self.collect(sources)
-        self.assertNotIn("stocktraining",sources.board_queries)
+        self.assertEqual(sources.board_queries,{b["id"] for b in sources.CAFES})
 
 
 if __name__ == "__main__":
